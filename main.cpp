@@ -268,12 +268,13 @@ int main()
     unsigned int channels = CHANNEL;
     int error = 0;
     
-    printf("\n==========EQ/DRC process release version 1.1===============\n");
+    printf("\n==========EQ/DRC process release version 1.2===============\n");
     alsa_fake_device_record_open(&capture_handle,channels,sampleRate);
     alsa_fake_device_write_open(&write_handle,channels,sampleRate);
     
     while(1)
     { 
+repeat:
         err = snd_pcm_readi(capture_handle, buffer , READ_FRAME);
         if(err != READ_FRAME)
         {
@@ -287,7 +288,16 @@ int main()
                // Still an error, need to exit.
             if (err < 0) {
                 printf( "Error occured while recording: %s\n", snd_strerror(err));
-                goto error;
+		        usleep(100 * 1000);
+                if (capture_handle) 
+                    snd_pcm_close(capture_handle);
+                alsa_fake_device_record_open(&capture_handle,channels,sampleRate);
+                
+                if (write_handle)   
+		            snd_pcm_close(write_handle);
+				alsa_fake_device_write_open(&write_handle,channels,sampleRate);
+                goto repeat;
+                //goto error;
             }
         }
         
@@ -306,7 +316,14 @@ int main()
 			if (err < 0)
 			{
 				printf( "Error occured while writing: %s\n", snd_strerror(err));
-				goto error;
+                printf("\n===reopen fake device write===\n");
+                //goto error;
+                if (write_handle)   
+                    snd_pcm_close(write_handle);
+                alsa_fake_device_write_open(&write_handle,channels,sampleRate);
+                goto repeat;
+		//goto error;
+
 			}
 		}
     }
