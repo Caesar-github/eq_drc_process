@@ -27,10 +27,9 @@ void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32
     snd_pcm_hw_params_t *hw_params;
     snd_pcm_uframes_t periodSize = PERIOD_SIZE;
     snd_pcm_uframes_t bufferSize = BUFFER_SIZE;
-    int dir;
+    int dir = 0;
     int err;
 
-    
     err = snd_pcm_open(capture_handle, REC_DEVICE_NAME, SND_PCM_STREAM_CAPTURE, 0);
     if (err)
     {
@@ -38,8 +37,8 @@ void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32
         exit(1);
     }
     printf("snd_pcm_open\n");
-    //snd_pcm_hw_params_alloca(&hw_params);
-    
+    //err = snd_pcm_hw_params_alloca(&hw_params);
+
     err = snd_pcm_hw_params_malloc(&hw_params);
     if(err)
     {
@@ -98,7 +97,7 @@ void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32
     }
     printf("periodSize = %d\n",periodSize);
     
-    err = snd_pcm_hw_params_set_rate_near(*capture_handle, hw_params, &rate, &dir);
+    err = snd_pcm_hw_params_set_rate_near(*capture_handle, hw_params, &rate, 0/*&dir*/);
     if (err)
     {
         printf("Error setting sampling rate (%d): %s\n", rate, snd_strerror(err));
@@ -118,7 +117,8 @@ void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32
      }
     
      printf(" open record device done \n");
-     //snd_pcm_hw_params_free(hw_params);
+     if(hw_params)
+        snd_pcm_hw_params_free(hw_params);
 }
 
 extern  int set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t buffer_size,
@@ -141,7 +141,8 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle,int channels,uint32_t 
     }
     printf( "interleaved mode\n");
 
-    snd_pcm_hw_params_alloca(&write_params);
+   // snd_pcm_hw_params_alloca(&write_params);
+    snd_pcm_hw_params_malloc(&write_params);
     printf( "snd_pcm_hw_params_alloca\n");
 
     snd_pcm_hw_params_any(*write_handle, write_params);
@@ -195,6 +196,7 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle,int channels,uint32_t 
     }
     printf("setting sampling rate (%d)\n", write_sampleRate);
     
+    
 #if 0
     snd_pcm_uframes_t write_final_buffer;
     write_err = snd_pcm_hw_params_get_buffer_size(write_params, &write_final_buffer);
@@ -213,8 +215,11 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle,int channels,uint32_t 
     }
 
 	printf(" open write device is successful \n");
+	
+	
 	set_sw_params(*write_handle,write_bufferSize,write_periodSize,NULL);
-
+    if(write_params)
+	    snd_pcm_hw_params_free(write_params);
 	
 }
 
@@ -225,63 +230,64 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle,int channels,uint32_t 
         char buf[256];
         int err;
 
-        snd_pcm_sw_params_alloca(&params);
-
+        //snd_pcm_sw_params_alloca(&params);
+        snd_pcm_sw_params_malloc(&params);
         if ((err = snd_pcm_sw_params_current(pcm, params)) != 0) {
                 snprintf(buf, sizeof(buf), "Get current params: %s", snd_strerror(err));
                 //goto fail;
                 exit(1);
         }
-
+        
         /* start the transfer when the buffer is full (or almost full) */
         snd_pcm_uframes_t threshold = (buffer_size / period_size) * period_size;
         if ((err = snd_pcm_sw_params_set_start_threshold(pcm, params, threshold)) != 0) {
                 snprintf(buf, sizeof(buf), "Set start threshold: %s: %lu", snd_strerror(err), threshold);
                exit(1);
         }
-
+        
         /* allow the transfer when at least period_size samples can be processed */
         if ((err = snd_pcm_sw_params_set_avail_min(pcm, params, period_size)) != 0) {
                 snprintf(buf, sizeof(buf), "Set avail min: %s: %lu", snd_strerror(err), period_size);
                 exit(1);
         }
-
+       
         if ((err = snd_pcm_sw_params(pcm, params)) != 0) {
                 snprintf(buf, sizeof(buf), "%s", snd_strerror(err));
                 exit(1);
         }
-
+        if(params)
+            snd_pcm_sw_params_free(params);
         return 0;
 }
 
 
 int main()
 {
+
     snd_pcm_t *capture_handle;
     snd_pcm_t *write_handle;
     int err;
     short buffer[READ_FRAME * 2] = {0};
-    //float write_buffer[READ_FRAME * 2] = {0};
-    //int buffer[2048] = {0};//MAX 1024
     int ret = -1;
     unsigned int sampleRate = SAMPLE_RATE;
     unsigned int channels = CHANNEL;
     int error = 0;
-    
-    printf("\n==========EQ/DRC process release version 1.2===============\n");
+
+repeat:
+
+    printf("\n==========EQ/DRC process release version 1.21===============\n");
     alsa_fake_device_record_open(&capture_handle,channels,sampleRate);
     alsa_fake_device_write_open(&write_handle,channels,sampleRate);
-    
+
     while(1)
-    { 
-repeat:
+    {
         err = snd_pcm_readi(capture_handle, buffer , READ_FRAME);
         if(err != READ_FRAME)
         {
-             gettimeofday(&tv_begin, NULL);
-             printf("====read frame error = %d===\n",err);
-             printf("timeread = %ld\n",(tv_begin.tv_sec * 1000 +tv_begin.tv_usec / 1000));
-        }          
+            printf("====read frame error = %d===\n",err);
+             //gettimeofday(&tv_begin, NULL);
+             //printf("timeread = %ld\n",(tv_begin.tv_sec * 1000 +tv_begin.tv_usec / 1000));
+        }
         if (err == -EPIPE) printf( "Overrun occurred: %d\n", err);
         if (err < 0) {
             err = snd_pcm_recover(capture_handle, err, 0);
@@ -289,25 +295,20 @@ repeat:
             if (err < 0) {
                 printf( "Error occured while recording: %s\n", snd_strerror(err));
 		        usleep(100 * 1000);
-                if (capture_handle) 
+		        if (capture_handle)
                     snd_pcm_close(capture_handle);
-                alsa_fake_device_record_open(&capture_handle,channels,sampleRate);
-                
-                if (write_handle)   
+                if (write_handle)
 		            snd_pcm_close(write_handle);
-				alsa_fake_device_write_open(&write_handle,channels,sampleRate);
                 goto repeat;
-                //goto error;
             }
         }
-        
+
         err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
         if(err != READ_FRAME)
         {
-            gettimeofday(&tv_begin, NULL);
+            //gettimeofday(&tv_begin, NULL);
             printf("====write frame error = %d===\n",err);
-            printf("time_write = %ld\n",(tv_begin.tv_sec * 1000 +tv_begin.tv_usec / 1000));
-        
+            //printf("time_write = %ld\n",(tv_begin.tv_sec * 1000 +tv_begin.tv_usec / 1000));
         }
         if (err == -EPIPE) printf("Underrun occurred from write: %d\n", err);
         if (err < 0) {
@@ -316,14 +317,12 @@ repeat:
 			if (err < 0)
 			{
 				printf( "Error occured while writing: %s\n", snd_strerror(err));
-                printf("\n===reopen fake device write===\n");
-                //goto error;
-                if (write_handle)   
-                    snd_pcm_close(write_handle);
-                alsa_fake_device_write_open(&write_handle,channels,sampleRate);
+                usleep(100 * 1000);
+                if (capture_handle)
+                    snd_pcm_close(capture_handle);
+                if (write_handle)
+		            snd_pcm_close(write_handle);
                 goto repeat;
-		//goto error;
-
 			}
 		}
     }
