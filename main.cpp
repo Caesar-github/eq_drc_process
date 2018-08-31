@@ -21,6 +21,8 @@
 struct timeval tv_begin, tv_end;
 //gettimeofday(&tv_begin, NULL);
 
+extern  int set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t buffer_size,
+                snd_pcm_uframes_t period_size, char **msg);
 
 void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32_t rate)
 {
@@ -117,12 +119,13 @@ void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32
      }
     
      printf(" open record device done \n");
+     //set_sw_params(*capture_handle,bufferSize,periodSize,NULL);
      if(hw_params)
         snd_pcm_hw_params_free(hw_params);
+
 }
 
-extern  int set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t buffer_size,
-                snd_pcm_uframes_t period_size, char **msg);
+
 
 void alsa_fake_device_write_open(snd_pcm_t** write_handle,int channels,uint32_t write_sampleRate)
 {
@@ -264,6 +267,7 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle,int channels,uint32_t 
 int main()
 {
 
+repeat:
     snd_pcm_t *capture_handle;
     snd_pcm_t *write_handle;
     int err;
@@ -272,10 +276,11 @@ int main()
     unsigned int sampleRate = SAMPLE_RATE;
     unsigned int channels = CHANNEL;
     int error = 0;
+    int runframe =0;
 
-repeat:
 
-    printf("\n==========EQ/DRC process release version 1.21===============\n");
+
+    printf("\n==========EQ/DRC process release version 1.22===============\n");
     alsa_fake_device_record_open(&capture_handle,channels,sampleRate);
     alsa_fake_device_write_open(&write_handle,channels,sampleRate);
 
@@ -294,7 +299,7 @@ repeat:
                // Still an error, need to exit.
             if (err < 0) {
                 printf( "Error occured while recording: %s\n", snd_strerror(err));
-		        usleep(100 * 1000);
+		        usleep(200 * 1000);
 		        if (capture_handle)
                     snd_pcm_close(capture_handle);
                 if (write_handle)
@@ -302,7 +307,7 @@ repeat:
                 goto repeat;
             }
         }
-
+        
         err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
         if(err != READ_FRAME)
         {
@@ -317,7 +322,7 @@ repeat:
 			if (err < 0)
 			{
 				printf( "Error occured while writing: %s\n", snd_strerror(err));
-                usleep(100 * 1000);
+                usleep(200 * 1000);
                 if (capture_handle)
                     snd_pcm_close(capture_handle);
                 if (write_handle)
