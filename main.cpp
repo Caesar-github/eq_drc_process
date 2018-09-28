@@ -13,6 +13,8 @@
 #define READ_FRAME  1024     //(768)
 #define BUFFER_SIZE (4096)  //(SAMPLE_RATE/2)
 #define PERIOD_SIZE (1024)  //(SAMPLE_RATE/8)
+#define MUTE_TIME_THRESHOD (4)//seconds
+#define MUTE_FRAME_THRESHOD (SAMPLE_RATE * MUTE_TIME_THRESHOD / READ_FRAME)//30 seconds
 //#define ALSA_READ_FORMAT SND_PCM_FORMAT_S32_LE
 #define ALSA_READ_FORMAT SND_PCM_FORMAT_S16_LE
 #define ALSA_WRITE_FORMAT SND_PCM_FORMAT_S16_LE
@@ -253,7 +255,7 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle,int channels,uint32_t 
                 snprintf(buf, sizeof(buf), "Set avail min: %s: %lu", snd_strerror(err), period_size);
                 exit(1);
         }
-       
+
         if ((err = snd_pcm_sw_params(pcm, params)) != 0) {
                 snprintf(buf, sizeof(buf), "%s", snd_strerror(err));
                 exit(1);
@@ -263,6 +265,22 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle,int channels,uint32_t 
         return 0;
 }
 
+int is_mute_frame(short *in,unsigned int size)
+{
+    int i;
+    int mute_count = 0;
+    if(!size)
+    {
+        printf("frame size is zero!!!\n");
+        return 0;
+    }
+    for(i = 0; i < size;i ++)
+    {
+        if(in[i] != 0)
+        return 0;
+    }
+    return 1;
+}
 
 int main()
 {
@@ -277,21 +295,21 @@ repeat:
     unsigned int channels = CHANNEL;
     int error = 0;
     int runframe =0;
+    int mute_frame_thd = (int)MUTE_FRAME_THRESHOD;
+    int mute_frame = 0;
+    int res ;
 
-
-
-    printf("\n==========EQ/DRC process release version 1.22===============\n");
+    printf("\n==========EQ/DRC process release version 1.23===============\n");
     alsa_fake_device_record_open(&capture_handle,channels,sampleRate);
     alsa_fake_device_write_open(&write_handle,channels,sampleRate);
-
     while(1)
     {
         err = snd_pcm_readi(capture_handle, buffer , READ_FRAME);
         if(err != READ_FRAME)
         {
             printf("====read frame error = %d===\n",err);
-             //gettimeofday(&tv_begin, NULL);
-             //printf("timeread = %ld\n",(tv_begin.tv_sec * 1000 +tv_begin.tv_usec / 1000));
+            //gettimeofday(&tv_begin, NULL);
+            //printf("timeread = %ld\n",(tv_begin.tv_sec * 1000 +tv_begin.tv_usec / 1000));
         }
         if (err == -EPIPE) printf( "Overrun occurred: %d\n", err);
         if (err < 0) {
@@ -307,35 +325,58 @@ repeat:
                 goto repeat;
             }
         }
-        
-        err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
-        if(err != READ_FRAME)
+        if(is_mute_frame(buffer, READ_FRAME))
+            mute_frame ++;
+        else
+            mute_frame = 0;
+
+        if(mute_frame >= mute_frame_thd)
         {
-            //gettimeofday(&tv_begin, NULL);
-            printf("====write frame error = %d===\n",err);
-            //printf("time_write = %ld\n",(tv_begin.tv_sec * 1000 +tv_begin.tv_usec / 1000));
+            //usleep(30*1000);
+            if (write_handle)
+            {
+                res = snd_pcm_close(write_handle);
+                printf("%d second no playback,close write handle for you!!!\n ",MUTE_TIME_THRESHOD);
+                write_handle = NULL;
+            }
+
         }
-        if (err == -EPIPE) printf("Underrun occurred from write: %d\n", err);
-        if (err < 0) {
-			err = snd_pcm_recover(write_handle, err, 0);
-			//std::this_thread::sleep_for(std::chrono::milliseconds(20));				// Still an error, need to exit.
-			if (err < 0)
-			{
-				printf( "Error occured while writing: %s\n", snd_strerror(err));
-                usleep(200 * 1000);
-                if (capture_handle)
-                    snd_pcm_close(capture_handle);
-                if (write_handle)
-		            snd_pcm_close(write_handle);
-                goto repeat;
-			}
-		}
+        else {
+            if(write_handle == NULL)
+                alsa_fake_device_write_open(&write_handle,channels,sampleRate);
+             //usleep(30*1000);
+            err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
+            if(err != READ_FRAME)
+            {
+                //gettimeofday(&tv_begin, NULL);
+                printf("====write frame error = %d===\n",err);
+                //printf("time_write = %ld\n",(tv_begin.tv_sec * 1000 +tv_begin.tv_usec / 1000));
+            }
+            if (err == -EPIPE) printf("Underrun occurred from write: %d\n", err);
+            if (err < 0) {
+                err = snd_pcm_recover(write_handle, err, 0);
+                //std::this_thread::sleep_for(std::chrono::milliseconds(20)); // Still an error, need to exit.
+                if (err < 0)
+                {
+                    printf( "Error occured while writing: %s\n", snd_strerror(err));
+                    usleep(200 * 1000);
+                    if (capture_handle) {
+                        snd_pcm_close(capture_handle);
+                        capture_handle = NULL;
+                    }
+                    if (write_handle) {
+                        snd_pcm_close(write_handle);
+                        write_handle = NULL;
+                    }
+                    goto repeat;
+                }
+            }
+        }
     }
 
     ret = 0;
 error:
     if (capture_handle) snd_pcm_close(capture_handle);
     if (write_handle)   snd_pcm_close(write_handle);
-    printf("eq_drc_process error..\n");
     return ret;
 }
