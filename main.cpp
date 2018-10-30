@@ -282,6 +282,21 @@ int is_mute_frame(short *in,unsigned int size)
     return 1;
 }
 
+/* Determine whether to enter the energy saving mode according to
+ * the value of the environment variable "EQ_LOW_POWERMODE"
+ */
+bool low_power_mode_check()
+{
+    char *value = NULL;
+
+    /* env: "EQ_LOW_POWERMODE=TRUE" or "EQ_LOW_POWERMODE=true" ? */
+    value = getenv("EQ_LOW_POWERMODE");
+    if (value && (!strcmp("TRUE", value) || !strcmp("true", value)))
+        return true;
+
+    return false;
+}
+
 int main()
 {
 
@@ -297,7 +312,7 @@ repeat:
     int runframe =0;
     int mute_frame_thd = (int)MUTE_FRAME_THRESHOD;
     int mute_frame = 0;
-    int res ;
+    int res;
 
     printf("\n==========EQ/DRC process release version 1.23===============\n");
     alsa_fake_device_record_open(&capture_handle,channels,sampleRate);
@@ -325,23 +340,20 @@ repeat:
                 goto repeat;
             }
         }
-        if(is_mute_frame(buffer, READ_FRAME))
+
+        if(low_power_mode_check() && is_mute_frame(buffer, READ_FRAME))
             mute_frame ++;
         else
             mute_frame = 0;
 
-        if(mute_frame >= mute_frame_thd)
-        {
+        if(mute_frame >= mute_frame_thd) {
             //usleep(30*1000);
-            if (write_handle)
-            {
+            if (write_handle) {
                 res = snd_pcm_close(write_handle);
-                printf("%d second no playback,close write handle for you!!!\n ",MUTE_TIME_THRESHOD);
+                printf("%d second no playback,close write handle for you!!!\n ", MUTE_TIME_THRESHOD);
                 write_handle = NULL;
             }
-
-        }
-        else {
+        } else {
             if(write_handle == NULL)
                 alsa_fake_device_write_open(&write_handle,channels,sampleRate);
              //usleep(30*1000);
