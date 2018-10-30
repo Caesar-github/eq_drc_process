@@ -10,6 +10,7 @@
 #define CHANNEL 2
 #define REC_DEVICE_NAME "fake_record"
 #define WRITE_DEVICE_NAME "fake_play"
+#define JACK_DEVICE_NAME "fake_jack"
 #define READ_FRAME  1024     //(768)
 #define BUFFER_SIZE (4096)  //(SAMPLE_RATE/2)
 #define PERIOD_SIZE (1024)  //(SAMPLE_RATE/8)
@@ -19,6 +20,13 @@
 #define ALSA_READ_FORMAT SND_PCM_FORMAT_S16_LE
 #define ALSA_WRITE_FORMAT SND_PCM_FORMAT_S16_LE
 
+/*
+ * Select different alsa pathways based on device type.
+ *  LINE_OUT: LR-Mix(fake_play)->EqDrcProcess(ladspa)->Speaker(real_playback)
+ *  HEAD_SET: fake_jack -> Headset(real_playback)
+ */
+#define DEVICE_FLAG_LINE_OUT 0x01
+#define DEVICE_FLAG_HEAD_SET 0x02
 
 struct timeval tv_begin, tv_end;
 //gettimeofday(&tv_begin, NULL);
@@ -129,24 +137,33 @@ void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32
 
 
 
-void alsa_fake_device_write_open(snd_pcm_t** write_handle,int channels,uint32_t write_sampleRate)
+void alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
+                                 uint32_t write_sampleRate, int device_flag)
 {
     snd_pcm_hw_params_t *write_params;
     snd_pcm_uframes_t write_periodSize = PERIOD_SIZE;
     snd_pcm_uframes_t write_bufferSize = BUFFER_SIZE;
     int write_err;
-	int write_dir;
-    
-    write_err = snd_pcm_open(write_handle, WRITE_DEVICE_NAME, SND_PCM_STREAM_PLAYBACK, 0);
+    int write_dir;
 
-	if (write_err)
+    if (device_flag == DEVICE_FLAG_HEAD_SET) {
+        printf("Open PCM: %s\n", JACK_DEVICE_NAME);
+        write_err = snd_pcm_open(write_handle, JACK_DEVICE_NAME,
+                                 SND_PCM_STREAM_PLAYBACK, 0);
+    } else {
+        printf("Open PCM: %s\n", WRITE_DEVICE_NAME);
+        write_err = snd_pcm_open(write_handle, WRITE_DEVICE_NAME,
+                                 SND_PCM_STREAM_PLAYBACK, 0);
+    }
+
+    if (write_err)
     {
         printf( "Unable to open playback PCM device: \n");
         exit(1);
     }
     printf( "interleaved mode\n");
 
-   // snd_pcm_hw_params_alloca(&write_params);
+    // snd_pcm_hw_params_alloca(&write_params);
     snd_pcm_hw_params_malloc(&write_params);
     printf( "snd_pcm_hw_params_alloca\n");
 
@@ -201,7 +218,6 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle,int channels,uint32_t 
     }
     printf("setting sampling rate (%d)\n", write_sampleRate);
     
-    
 #if 0
     snd_pcm_uframes_t write_final_buffer;
     write_err = snd_pcm_hw_params_get_buffer_size(write_params, &write_final_buffer);
@@ -211,6 +227,7 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle,int channels,uint32_t 
     write_err = snd_pcm_hw_params_get_period_size(write_params, &write_final_period, &write_dir);
     printf(" final period size %ld \n" , write_final_period);
 #endif
+
     /* Write the parameters to the driver */
     write_err = snd_pcm_hw_params(*write_handle, write_params);
     if (write_err < 0)
@@ -219,13 +236,10 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle,int channels,uint32_t 
         exit(1);
     }
 
-	printf(" open write device is successful \n");
-	
-	
-	set_sw_params(*write_handle,write_bufferSize,write_periodSize,NULL);
+    printf("open write device is successful\n");
+    set_sw_params(*write_handle, write_bufferSize, write_periodSize, NULL);
     if(write_params)
-	    snd_pcm_hw_params_free(write_params);
-	
+        snd_pcm_hw_params_free(write_params);
 }
 
  int set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t buffer_size,
@@ -297,6 +311,34 @@ bool low_power_mode_check()
     return false;
 }
 
+/* Check device changing. */
+int get_device_flag()
+{
+    int fd = 0, ret = 0;
+    char buff[512] = {0};
+    int device_flag = DEVICE_FLAG_LINE_OUT;
+    char *path = "/sys/devices/platform/ff560000.acodec/rk3308-acodec-dev/dac_output";
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        printf("Open %s failed!\n", path);
+        return device_flag;
+    }
+
+    ret = read(fd, buff, sizeof(buff));
+    if (ret <= 0) {
+        printf("Read %s failed!\n", path);
+        close(fd);
+        return device_flag;
+    }
+
+    if (strstr(buff, "hp out"))
+        device_flag = DEVICE_FLAG_HEAD_SET;
+
+    close(fd);
+    return device_flag;
+}
+
 int main()
 {
 
@@ -313,10 +355,14 @@ repeat:
     int mute_frame_thd = (int)MUTE_FRAME_THRESHOD;
     int mute_frame = 0;
     int res;
+    /* LINE_OUT is the default output device */
+    int device_flag = DEVICE_FLAG_LINE_OUT;
+    int new_flag = DEVICE_FLAG_LINE_OUT;
 
     printf("\n==========EQ/DRC process release version 1.23===============\n");
-    alsa_fake_device_record_open(&capture_handle,channels,sampleRate);
-    alsa_fake_device_write_open(&write_handle,channels,sampleRate);
+    alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
+    alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag);
+
     while(1)
     {
         err = snd_pcm_readi(capture_handle, buffer , READ_FRAME);
@@ -354,9 +400,21 @@ repeat:
                 write_handle = NULL;
             }
         } else {
+            new_flag = get_device_flag();
+            if (new_flag != device_flag) {
+                printf("Device route changed, frome\"%s\" to \"%s\"\n",
+                       (device_flag == DEVICE_FLAG_HEAD_SET) ? "HEAD_SET" : "LINE_OUT",
+                       (new_flag == DEVICE_FLAG_HEAD_SET) ? "HEAD_SET" : "LINE_OUT");
+                device_flag = new_flag;
+                if (write_handle) {
+                    snd_pcm_close(write_handle);
+                    write_handle = NULL;
+                }
+            }
+
             if(write_handle == NULL)
-                alsa_fake_device_write_open(&write_handle,channels,sampleRate);
-             //usleep(30*1000);
+                alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag);
+            //usleep(30*1000);
             err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
             if(err != READ_FRAME)
             {
