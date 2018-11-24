@@ -2,16 +2,18 @@
 #include <stdlib.h>
 #include <iostream>
 #include <vector>
+
 #include <alsa/asoundlib.h>
 #include <sys/time.h>
-
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #define SAMPLE_RATE 48000
 #define CHANNEL 2
 #define REC_DEVICE_NAME "fake_record"
 #define WRITE_DEVICE_NAME "fake_play"
 #define JACK_DEVICE_NAME "fake_jack"
-#define READ_FRAME  1024     //(768)
+#define READ_FRAME  1024    //(768)
 #define BUFFER_SIZE (4096)  //(SAMPLE_RATE/2)
 #define PERIOD_SIZE (1024)  //(SAMPLE_RATE/8)
 #define MUTE_TIME_THRESHOD (4)//seconds
@@ -24,15 +26,20 @@
  * Select different alsa pathways based on device type.
  *  LINE_OUT: LR-Mix(fake_play)->EqDrcProcess(ladspa)->Speaker(real_playback)
  *  HEAD_SET: fake_jack -> Headset(real_playback)
+ *  BLUETOOTH: device as bluetooth source.
  */
-#define DEVICE_FLAG_LINE_OUT 0x01
-#define DEVICE_FLAG_HEAD_SET 0x02
+#define DEVICE_FLAG_LINE_OUT  0x01
+#define DEVICE_FLAG_HEAD_SET  0x02
+#define DEVICE_FLAG_BLUETOOTH 0x04
+
+static char g_bt_mac_addr[17];
+static int g_bt_is_connect;
 
 struct timeval tv_begin, tv_end;
 //gettimeofday(&tv_begin, NULL);
 
-extern  int set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t buffer_size,
-                snd_pcm_uframes_t period_size, char **msg);
+extern int set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t buffer_size,
+                         snd_pcm_uframes_t period_size, char **msg);
 
 void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32_t rate)
 {
@@ -66,16 +73,16 @@ void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32
         exit(1);
     }
     printf("snd_pcm_hw_params_any!\n");
-    
+
     err = snd_pcm_hw_params_set_access(*capture_handle, hw_params, SND_PCM_ACCESS_RW_INTERLEAVED);
-   // err = snd_pcm_hw_params_set_access(*capture_handle, hw_params, SND_PCM_ACCESS_MMAP_NONINTERLEAVED);
+    // err = snd_pcm_hw_params_set_access(*capture_handle, hw_params, SND_PCM_ACCESS_MMAP_NONINTERLEAVED);
     if (err)
     {
         printf("Error setting interleaved mode\n");
         exit(1);
     }
     printf("snd_pcm_hw_params_set_access!\n");
-    
+
     err = snd_pcm_hw_params_set_format(*capture_handle, hw_params, ALSA_READ_FORMAT);
     if (err)
     {
@@ -83,7 +90,7 @@ void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32
         exit(1);
     }
     printf("snd_pcm_hw_params_set_format\n");
-    
+
     err = snd_pcm_hw_params_set_channels(*capture_handle, hw_params, channels);
     if (err)
     {
@@ -108,7 +115,7 @@ void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32
         exit(1);
     }
     printf("periodSize = %d\n",periodSize);
-    
+
     err = snd_pcm_hw_params_set_rate_near(*capture_handle, hw_params, &rate, 0/*&dir*/);
     if (err)
     {
@@ -116,26 +123,22 @@ void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32
         //goto error;
         exit(1);
     }
-    printf("rate = %d\n",rate);
+    printf("Rate = %d\n", rate);
 
-    
     /* Write the parameters to the driver */
-     err = snd_pcm_hw_params(*capture_handle, hw_params);
-     if (err < 0)
-     {
-         printf( "Unable to set HW parameters: %s\n", snd_strerror(err));
-         //goto error;
-         exit(1);
-     }
-    
-     printf(" open record device done \n");
-     //set_sw_params(*capture_handle,bufferSize,periodSize,NULL);
-     if(hw_params)
+    err = snd_pcm_hw_params(*capture_handle, hw_params);
+    if (err < 0)
+    {
+        printf( "Unable to set HW parameters: %s\n", snd_strerror(err));
+        //goto error;
+        exit(1);
+    }
+
+    printf("Open record device done \n");
+    //set_sw_params(*capture_handle,bufferSize,periodSize,NULL);
+    if(hw_params)
         snd_pcm_hw_params_free(hw_params);
-
 }
-
-
 
 void alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
                                  uint32_t write_sampleRate, int device_flag)
@@ -145,10 +148,17 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
     snd_pcm_uframes_t write_bufferSize = BUFFER_SIZE;
     int write_err;
     int write_dir;
+    char bluealsa_device[256] = {0};
 
     if (device_flag == DEVICE_FLAG_HEAD_SET) {
         printf("Open PCM: %s\n", JACK_DEVICE_NAME);
         write_err = snd_pcm_open(write_handle, JACK_DEVICE_NAME,
+                                 SND_PCM_STREAM_PLAYBACK, 0);
+    } else if (device_flag == DEVICE_FLAG_BLUETOOTH) {
+        sprintf(bluealsa_device, "%s%s", "bluealsa:HCI=hci0,PROFILE=a2dp,DEV=",
+                g_bt_mac_addr);
+        printf("Open PCM: %s\n", bluealsa_device);
+        write_err = snd_pcm_open(write_handle, bluealsa_device,
                                  SND_PCM_STREAM_PLAYBACK, 0);
     } else {
         printf("Open PCM: %s\n", WRITE_DEVICE_NAME);
@@ -156,8 +166,7 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
                                  SND_PCM_STREAM_PLAYBACK, 0);
     }
 
-    if (write_err)
-    {
+    if (write_err) {
         printf( "Unable to open playback PCM device: \n");
         exit(1);
     }
@@ -165,7 +174,7 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
 
     // snd_pcm_hw_params_alloca(&write_params);
     snd_pcm_hw_params_malloc(&write_params);
-    printf( "snd_pcm_hw_params_alloca\n");
+    printf("snd_pcm_hw_params_alloca\n");
 
     snd_pcm_hw_params_any(*write_handle, write_params);
 
@@ -177,7 +186,7 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
         exit(1);
     }
     printf( "interleaved mode\n");
-    
+
     write_err = snd_pcm_hw_params_set_format(*write_handle, write_params, ALSA_WRITE_FORMAT);
     if (write_err)
     {
@@ -193,6 +202,14 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
         exit(1);
     }
     printf("channels = %d\n",channels);
+
+    write_err = snd_pcm_hw_params_set_rate_near(*write_handle, write_params, &write_sampleRate, 0/*&write_dir*/);
+    if (write_err)
+    {
+        printf("Error setting sampling rate (%d): %s\n", write_sampleRate, snd_strerror(write_err));
+        exit(1);
+    }
+    printf("setting sampling rate (%d)\n", write_sampleRate);
 
     write_err = snd_pcm_hw_params_set_buffer_size_near(*write_handle, write_params, &write_bufferSize);
     if (write_err)
@@ -210,14 +227,6 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
     }
     printf("write_periodSize = %d\n",write_periodSize);
 
-    write_err = snd_pcm_hw_params_set_rate_near(*write_handle, write_params, &write_sampleRate, 0/*&write_dir*/);
-    if (write_err)
-    {
-        printf("Error setting sampling rate (%d): %s\n", write_sampleRate, snd_strerror(write_err));
-        exit(1);
-    }
-    printf("setting sampling rate (%d)\n", write_sampleRate);
-    
 #if 0
     snd_pcm_uframes_t write_final_buffer;
     write_err = snd_pcm_hw_params_get_buffer_size(write_params, &write_final_buffer);
@@ -242,57 +251,58 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
         snd_pcm_hw_params_free(write_params);
 }
 
- int set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t buffer_size,
-                snd_pcm_uframes_t period_size, char **msg) {
+int set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t buffer_size,
+                  snd_pcm_uframes_t period_size, char **msg) {
 
-        snd_pcm_sw_params_t *params;
-        char buf[256];
-        int err;
+    snd_pcm_sw_params_t *params;
+    char buf[256];
+    int err;
 
-        //snd_pcm_sw_params_alloca(&params);
-        snd_pcm_sw_params_malloc(&params);
-        if ((err = snd_pcm_sw_params_current(pcm, params)) != 0) {
-                snprintf(buf, sizeof(buf), "Get current params: %s", snd_strerror(err));
-                //goto fail;
-                exit(1);
-        }
-        
-        /* start the transfer when the buffer is full (or almost full) */
-        snd_pcm_uframes_t threshold = (buffer_size / period_size) * period_size;
-        if ((err = snd_pcm_sw_params_set_start_threshold(pcm, params, threshold)) != 0) {
-                snprintf(buf, sizeof(buf), "Set start threshold: %s: %lu", snd_strerror(err), threshold);
-               exit(1);
-        }
-        
-        /* allow the transfer when at least period_size samples can be processed */
-        if ((err = snd_pcm_sw_params_set_avail_min(pcm, params, period_size)) != 0) {
-                snprintf(buf, sizeof(buf), "Set avail min: %s: %lu", snd_strerror(err), period_size);
-                exit(1);
-        }
+    //snd_pcm_sw_params_alloca(&params);
+    snd_pcm_sw_params_malloc(&params);
+    if ((err = snd_pcm_sw_params_current(pcm, params)) != 0) {
+        snprintf(buf, sizeof(buf), "Get current params: %s", snd_strerror(err));
+        //goto fail;
+        exit(1);
+    }
 
-        if ((err = snd_pcm_sw_params(pcm, params)) != 0) {
-                snprintf(buf, sizeof(buf), "%s", snd_strerror(err));
-                exit(1);
-        }
-        if(params)
-            snd_pcm_sw_params_free(params);
-        return 0;
+    /* start the transfer when the buffer is full (or almost full) */
+    snd_pcm_uframes_t threshold = (buffer_size / period_size) * period_size;
+    if ((err = snd_pcm_sw_params_set_start_threshold(pcm, params, threshold)) != 0) {
+        snprintf(buf, sizeof(buf), "Set start threshold: %s: %lu", snd_strerror(err), threshold);
+        exit(1);
+    }
+
+    /* allow the transfer when at least period_size samples can be processed */
+    if ((err = snd_pcm_sw_params_set_avail_min(pcm, params, period_size)) != 0) {
+        snprintf(buf, sizeof(buf), "Set avail min: %s: %lu", snd_strerror(err), period_size);
+        exit(1);
+    }
+
+    if ((err = snd_pcm_sw_params(pcm, params)) != 0) {
+        snprintf(buf, sizeof(buf), "%s", snd_strerror(err));
+        exit(1);
+    }
+    if(params)
+        snd_pcm_sw_params_free(params);
+
+    return 0;
 }
 
 int is_mute_frame(short *in,unsigned int size)
 {
     int i;
     int mute_count = 0;
-    if(!size)
-    {
+
+    if (!size) {
         printf("frame size is zero!!!\n");
         return 0;
     }
-    for(i = 0; i < size;i ++)
-    {
+    for (i = 0; i < size;i ++) {
         if(in[i] != 0)
         return 0;
     }
+
     return 1;
 }
 
@@ -317,7 +327,12 @@ int get_device_flag()
     int fd = 0, ret = 0;
     char buff[512] = {0};
     int device_flag = DEVICE_FLAG_LINE_OUT;
-    char *path = "/sys/devices/platform/ff560000.acodec/rk3308-acodec-dev/dac_output";
+    const char *path = "/sys/devices/platform/ff560000.acodec/rk3308-acodec-dev/dac_output";
+    FILE *pp = NULL; /* pipeline */
+    char *bt_mac_addr = NULL;
+
+    if (g_bt_is_connect)
+        return DEVICE_FLAG_BLUETOOTH;
 
     fd = open(path, O_RDONLY);
     if (fd < 0) {
@@ -336,53 +351,150 @@ int get_device_flag()
         device_flag = DEVICE_FLAG_HEAD_SET;
 
     close(fd);
+
     return device_flag;
+}
+
+/* Get device name frome device_flag */
+const char *get_device_name(int device_flag)
+{
+    const char *device_name = NULL;
+
+    switch (device_flag) {
+        case DEVICE_FLAG_BLUETOOTH:
+            device_name = "BLUETOOTH";
+            break;
+        case DEVICE_FLAG_HEAD_SET:
+            device_name = JACK_DEVICE_NAME;
+            break;
+        case DEVICE_FLAG_LINE_OUT:
+            device_name = WRITE_DEVICE_NAME;
+            break;
+        default:
+            break;
+    }
+
+    return device_name;
+}
+
+void *a2dp_status_listen(void *arg)
+{
+    int ret = 0;
+    char buff[100] = {0};
+    struct sockaddr_un clientAddr;
+    struct sockaddr_un serverAddr;
+    int sockfd;
+    socklen_t addr_len;
+    char *start = NULL;
+    snd_pcm_t* audio_bt_handle;
+    char bluealsa_device[256] = {0};
+    int retry_cnt = 5;
+
+    sockfd = socket(AF_UNIX, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
+        printf("Create socket failed!\n");
+        return NULL;
+    }
+
+    serverAddr.sun_family = AF_UNIX;
+    strcpy(serverAddr.sun_path, "/tmp/a2dp_master_status");
+
+    system("rm -rf /tmp/a2dp_master_status");
+    ret = bind(sockfd, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
+    if (ret < 0) {
+        printf("Bind Local addr failed!\n");
+        return NULL;
+    }
+
+    while(1) {
+        memset(buff, 0, sizeof(buff));
+        ret = recvfrom(sockfd, buff, sizeof(buff), 0, (struct sockaddr *)&clientAddr, &addr_len);
+        if (ret <= 0)
+            break;
+
+        if (strstr(buff, "status:connect")) {
+            start = strstr(buff, "address:");
+            if (start == NULL) {
+                printf("FUCN:%s. Received a malformed message(%s)\n", __func__, buff);
+                continue;
+            }
+            start += strlen("address:");
+            if (!g_bt_is_connect) {
+                memcpy(g_bt_mac_addr, start, sizeof(g_bt_mac_addr));
+                sprintf(bluealsa_device, "%s%s", "bluealsa:HCI=hci0,PROFILE=a2dp,DEV=",
+                        g_bt_mac_addr);
+                while (retry_cnt--) {
+                    ret = snd_pcm_open(&audio_bt_handle, bluealsa_device,
+                                       SND_PCM_STREAM_PLAYBACK, 0);
+                    if (ret == 0) {
+                        snd_pcm_close(audio_bt_handle);
+                        g_bt_is_connect = 1;
+                    }
+                    usleep(600000); //600ms * 5 = 3s.
+                }
+            }
+        } else if (strstr(buff, "status:disconnect"))
+            g_bt_is_connect = 0;
+        else
+            printf("FUCN:%s. Received a malformed message(%s)\n", __func__, buff);
+    }
+
+    close(sockfd);
+    return NULL;
 }
 
 int main()
 {
-
-repeat:
     snd_pcm_t *capture_handle;
     snd_pcm_t *write_handle;
     int err;
-    short buffer[READ_FRAME * 2] = {0};
-    int ret = -1;
-    unsigned int sampleRate = SAMPLE_RATE;
-    unsigned int channels = CHANNEL;
-    int error = 0;
-    int runframe =0;
-    int mute_frame_thd = (int)MUTE_FRAME_THRESHOD;
-    int mute_frame = 0;
-    int res;
+    short buffer[READ_FRAME * 2];
+    unsigned int sampleRate;
+    unsigned int channels;
+    int mute_frame_thd;
+    int mute_frame;
     /* LINE_OUT is the default output device */
-    int device_flag = DEVICE_FLAG_LINE_OUT;
-    int new_flag = DEVICE_FLAG_LINE_OUT;
+    int device_flag, new_flag;
+    pthread_t a2dp_status_listen_thread;
+
+    /* Create a thread to listen for Bluetooth connection status. */
+    pthread_create(&a2dp_status_listen_thread, NULL, a2dp_status_listen, NULL);
+
+repeat:
+    capture_handle = NULL;
+    write_handle = NULL;
+    err = 0;
+    memset(buffer, 0, sizeof(buffer));
+    sampleRate = SAMPLE_RATE;
+    channels = CHANNEL;
+    mute_frame_thd = (int)MUTE_FRAME_THRESHOD;
+    mute_frame = 0;
+    /* LINE_OUT is the default output device */
+    device_flag = DEVICE_FLAG_LINE_OUT;
+    new_flag = DEVICE_FLAG_LINE_OUT;
 
     printf("\n==========EQ/DRC process release version 1.23===============\n");
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
     alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag);
 
-    while(1)
-    {
+    while (1) {
         err = snd_pcm_readi(capture_handle, buffer , READ_FRAME);
-        if(err != READ_FRAME)
-        {
+        if (err != READ_FRAME)
             printf("====read frame error = %d===\n",err);
-            //gettimeofday(&tv_begin, NULL);
-            //printf("timeread = %ld\n",(tv_begin.tv_sec * 1000 +tv_begin.tv_usec / 1000));
-        }
-        if (err == -EPIPE) printf( "Overrun occurred: %d\n", err);
+
         if (err < 0) {
+            if (err == -EPIPE)
+                printf( "Overrun occurred: %d\n", err);
+
             err = snd_pcm_recover(capture_handle, err, 0);
-               // Still an error, need to exit.
+            // Still an error, need to exit.
             if (err < 0) {
                 printf( "Error occured while recording: %s\n", snd_strerror(err));
-		        usleep(200 * 1000);
-		        if (capture_handle)
+                usleep(200 * 1000);
+                if (capture_handle)
                     snd_pcm_close(capture_handle);
                 if (write_handle)
-		            snd_pcm_close(write_handle);
+                    snd_pcm_close(write_handle);
                 goto repeat;
             }
         }
@@ -394,59 +506,68 @@ repeat:
 
         if(mute_frame >= mute_frame_thd) {
             //usleep(30*1000);
+            /* Reassign to avoid overflow */
+            mute_frame = mute_frame_thd;
             if (write_handle) {
-                res = snd_pcm_close(write_handle);
+                snd_pcm_close(write_handle);
                 printf("%d second no playback,close write handle for you!!!\n ", MUTE_TIME_THRESHOD);
                 write_handle = NULL;
             }
-        } else {
-            new_flag = get_device_flag();
-            if (new_flag != device_flag) {
-                printf("Device route changed, frome\"%s\" to \"%s\"\n",
-                       (device_flag == DEVICE_FLAG_HEAD_SET) ? "HEAD_SET" : "LINE_OUT",
-                       (new_flag == DEVICE_FLAG_HEAD_SET) ? "HEAD_SET" : "LINE_OUT");
-                device_flag = new_flag;
+            continue;
+        }
+
+        new_flag = get_device_flag();
+        if (new_flag != device_flag) {
+            printf("\nDevice route changed, frome\"%s\" to \"%s\"\n\n",
+                   get_device_name(device_flag), get_device_name(new_flag));
+            device_flag = new_flag;
+            if (write_handle) {
+                snd_pcm_close(write_handle);
+                write_handle = NULL;
+            }
+        }
+
+        while (write_handle == NULL) {
+            alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag);
+            if (write_handle == NULL) {
+                printf("Route change failed! Using default audio path.\n");
+                device_flag = DEVICE_FLAG_LINE_OUT;
+            }
+        }
+
+        //usleep(30*1000);
+        err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
+        if(err != READ_FRAME)
+            printf("====write frame error = %d===\n",err);
+
+        if (err < 0) {
+            if (err == -EPIPE)
+                printf("Underrun occurred from write: %d\n", err);
+
+            err = snd_pcm_recover(write_handle, err, 0);
+            if (err < 0) {
+                printf( "Error occured while writing: %s\n", snd_strerror(err));
+                usleep(200 * 1000);
+
                 if (write_handle) {
                     snd_pcm_close(write_handle);
                     write_handle = NULL;
                 }
-            }
 
-            if(write_handle == NULL)
-                alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag);
-            //usleep(30*1000);
-            err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
-            if(err != READ_FRAME)
-            {
-                //gettimeofday(&tv_begin, NULL);
-                printf("====write frame error = %d===\n",err);
-                //printf("time_write = %ld\n",(tv_begin.tv_sec * 1000 +tv_begin.tv_usec / 1000));
-            }
-            if (err == -EPIPE) printf("Underrun occurred from write: %d\n", err);
-            if (err < 0) {
-                err = snd_pcm_recover(write_handle, err, 0);
-                //std::this_thread::sleep_for(std::chrono::milliseconds(20)); // Still an error, need to exit.
-                if (err < 0)
-                {
-                    printf( "Error occured while writing: %s\n", snd_strerror(err));
-                    usleep(200 * 1000);
-                    if (capture_handle) {
-                        snd_pcm_close(capture_handle);
-                        capture_handle = NULL;
-                    }
-                    if (write_handle) {
-                        snd_pcm_close(write_handle);
-                        write_handle = NULL;
-                    }
-                    goto repeat;
-                }
+                if (device_flag == DEVICE_FLAG_BLUETOOTH)
+                    g_bt_is_connect = 0;
             }
         }
     }
 
-    ret = 0;
 error:
-    if (capture_handle) snd_pcm_close(capture_handle);
-    if (write_handle)   snd_pcm_close(write_handle);
-    return ret;
+    if (capture_handle)
+        snd_pcm_close(capture_handle);
+    if (write_handle)
+        snd_pcm_close(write_handle);
+
+    pthread_cancel(a2dp_status_listen_thread);
+    pthread_join(a2dp_status_listen_thread, NULL);
+
+    return 0;
 }
