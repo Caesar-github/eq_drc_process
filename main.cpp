@@ -411,6 +411,7 @@ void *a2dp_status_listen(void *arg)
         ret = recvfrom(sockfd, buff, sizeof(buff), 0, (struct sockaddr *)&clientAddr, &addr_len);
         if (ret <= 0)
             break;
+        printf("###### FUCN:%s. Received a malformed message(%s)\n", __func__, buff);
 
         if (strstr(buff, "status:connect")) {
             start = strstr(buff, "address:");
@@ -423,6 +424,7 @@ void *a2dp_status_listen(void *arg)
                 memcpy(g_bt_mac_addr, start, sizeof(g_bt_mac_addr));
                 sprintf(bluealsa_device, "%s%s", "bluealsa:HCI=hci0,PROFILE=a2dp,DEV=",
                         g_bt_mac_addr);
+                retry_cnt = 5;
                 while (retry_cnt--) {
                     ret = snd_pcm_open(&audio_bt_handle, bluealsa_device,
                                        SND_PCM_STREAM_PLAYBACK, 0);
