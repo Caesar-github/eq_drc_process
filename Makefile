@@ -1,7 +1,7 @@
 #common makefile header
 PROJECT_DIR := $(shell pwd)
 PROM    = eq_drc_process
-CXXFLAGS ?= -fPIC -O3 -I$(PROJECT_DIR) -lpthread -lasound -ldl
+CXXFLAGS ?= -fPIC -O3 -I$(PROJECT_DIR) -lpthread -lasound -ldl -lDeviceIo
 OBJ =  main.o
 $(PROM): $(OBJ)
 	$(CXX) -o $(PROM) $(OBJ) $(CXXFLAGS)

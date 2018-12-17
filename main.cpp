@@ -7,6 +7,7 @@
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <DeviceIo/Rk_wake_lock.h>
 
 #define SAMPLE_RATE 48000
 #define CHANNEL 2
@@ -34,6 +35,7 @@
 
 static char g_bt_mac_addr[17];
 static int g_bt_is_connect;
+static bool g_system_sleep = false;
 
 struct timeval tv_begin, tv_end;
 //gettimeofday(&tv_begin, NULL);
@@ -421,6 +423,7 @@ void *a2dp_status_listen(void *arg)
             }
             start += strlen("address:");
             if (!g_bt_is_connect) {
+		sleep(2);
                 memcpy(g_bt_mac_addr, start, sizeof(g_bt_mac_addr));
                 sprintf(bluealsa_device, "%s%s", "bluealsa:HCI=hci0,PROFILE=a2dp,DEV=",
                         g_bt_mac_addr);
@@ -435,10 +438,15 @@ void *a2dp_status_listen(void *arg)
                     usleep(600000); //600ms * 5 = 3s.
                 }
             }
-        } else if (strstr(buff, "status:disconnect"))
+        } else if (strstr(buff, "status:disconnect")) {
             g_bt_is_connect = 0;
-        else
+        } else if (strstr(buff, "status:suspend")) {
+            g_system_sleep = true;
+        } else if (strstr(buff, "status:resume")) {
+            g_system_sleep = false;
+        } else {
             printf("FUCN:%s. Received a malformed message(%s)\n", __func__, buff);
+        }
     }
 
     close(sockfd);
@@ -458,6 +466,9 @@ int main()
     /* LINE_OUT is the default output device */
     int device_flag, new_flag;
     pthread_t a2dp_status_listen_thread;
+    struct rk_wake_lock* wake_lock;
+
+    wake_lock = RK_wake_lock_new("eq_drc_process");
 
     /* Create a thread to listen for Bluetooth connection status. */
     pthread_create(&a2dp_status_listen_thread, NULL, a2dp_status_listen, NULL);
@@ -478,6 +489,7 @@ repeat:
     printf("\n==========EQ/DRC process release version 1.23===============\n");
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
     alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag);
+    RK_acquire_wake_lock(wake_lock);
 
     while (1) {
         err = snd_pcm_readi(capture_handle, buffer , READ_FRAME);
@@ -501,7 +513,9 @@ repeat:
             }
         }
 
-        if(low_power_mode_check() && is_mute_frame(buffer, READ_FRAME))
+        if (g_system_sleep)
+            mute_frame = mute_frame_thd;
+        else if(low_power_mode_check() && is_mute_frame(buffer, READ_FRAME))
             mute_frame ++;
         else
             mute_frame = 0;
@@ -512,6 +526,7 @@ repeat:
             mute_frame = mute_frame_thd;
             if (write_handle) {
                 snd_pcm_close(write_handle);
+                RK_release_wake_lock(wake_lock);
                 printf("%d second no playback,close write handle for you!!!\n ", MUTE_TIME_THRESHOD);
                 write_handle = NULL;
             }
@@ -530,6 +545,7 @@ repeat:
         }
 
         while (write_handle == NULL) {
+            RK_acquire_wake_lock(wake_lock);
             alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag);
             if (write_handle == NULL) {
                 printf("Route change failed! Using default audio path.\n");
