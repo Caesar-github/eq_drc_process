@@ -15,8 +15,9 @@
 #define WRITE_DEVICE_NAME "fake_play"
 #define JACK_DEVICE_NAME "fake_jack"
 #define READ_FRAME  1024    //(768)
-#define BUFFER_SIZE (4096)  //(SAMPLE_RATE/2)
 #define PERIOD_SIZE (1024)  //(SAMPLE_RATE/8)
+#define PERIOD_counts (20) //double of delay 200ms
+#define BUFFER_SIZE (PERIOD_SIZE * PERIOD_counts)
 #define MUTE_TIME_THRESHOD (4)//seconds
 #define MUTE_FRAME_THRESHOD (SAMPLE_RATE * MUTE_TIME_THRESHOD / READ_FRAME)//30 seconds
 //#define ALSA_READ_FORMAT SND_PCM_FORMAT_S32_LE
@@ -467,6 +468,8 @@ int main()
     int device_flag, new_flag;
     pthread_t a2dp_status_listen_thread;
     struct rk_wake_lock* wake_lock;
+    bool low_power_mode = low_power_mode_check();
+    char *silence_data = (char *)calloc(READ_FRAME * 2 * 2, 1);//2ch 16bit
 
     wake_lock = RK_wake_lock_new("eq_drc_process");
 
@@ -515,7 +518,7 @@ repeat:
 
         if (g_system_sleep)
             mute_frame = mute_frame_thd;
-        else if(low_power_mode_check() && is_mute_frame(buffer, READ_FRAME))
+        else if(low_power_mode && is_mute_frame(buffer, READ_FRAME))
             mute_frame ++;
         else
             mute_frame = 0;
@@ -550,6 +553,15 @@ repeat:
             if (write_handle == NULL) {
                 printf("Route change failed! Using default audio path.\n");
                 device_flag = DEVICE_FLAG_LINE_OUT;
+            }
+            if (low_power_mode) {
+		int i, num = PERIOD_counts / 2;
+                printf("feed mute data %d frame\n", num);
+                for (i = 0; i < num; i++) {
+                    err = snd_pcm_writei(write_handle, silence_data, READ_FRAME);
+                    if(err != READ_FRAME)
+                        printf("====write frame error = %d, not %d\n",err, READ_FRAME);
+                }
             }
         }
 
