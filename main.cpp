@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <DeviceIo/Rk_wake_lock.h>
+#include "Rk_wake_lock.h"
 
 #define SAMPLE_RATE 48000
 #define CHANNEL 2
