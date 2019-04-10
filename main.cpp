@@ -2,12 +2,14 @@
 #include <stdlib.h>
 #include <iostream>
 #include <vector>
+#include <errno.h>
 
 #include <alsa/asoundlib.h>
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include "Rk_wake_lock.h"
+#include "Rk_socket_app.h"
 
 #define SAMPLE_RATE 48000
 #define CHANNEL 2
@@ -30,13 +32,21 @@
  *  HEAD_SET: fake_jack -> Headset(real_playback)
  *  BLUETOOTH: device as bluetooth source.
  */
-#define DEVICE_FLAG_LINE_OUT  0x01
-#define DEVICE_FLAG_HEAD_SET  0x02
-#define DEVICE_FLAG_BLUETOOTH 0x04
+#define DEVICE_FLAG_LINE_OUT        0x01
+#define DEVICE_FLAG_HEAD_SET        0x02
+#define DEVICE_FLAG_BLUETOOTH       0x04
+#define DEVICE_FLAG_BLUETOOTH_BSA   0x05
+
+enum BT_CONNECT_STATE{
+    BT_DISCONNECT = 0,
+    BT_CONNECT_BLUEZ,
+    BT_CONNECT_BSA
+};
 
 static char g_bt_mac_addr[17];
-static int g_bt_is_connect;
+static enum BT_CONNECT_STATE g_bt_is_connect = BT_DISCONNECT;
 static bool g_system_sleep = false;
+static char sock_path[] = "/data/bsa/config/bsa_socket";
 
 struct timeval tv_begin, tv_end;
 //gettimeofday(&tv_begin, NULL);
@@ -144,7 +154,8 @@ void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32
 }
 
 void alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
-                                 uint32_t write_sampleRate, int device_flag)
+                                 uint32_t write_sampleRate, int device_flag,
+                                 int *socket_fd)
 {
     snd_pcm_hw_params_t *write_params;
     snd_pcm_uframes_t write_periodSize = PERIOD_SIZE;
@@ -163,6 +174,14 @@ void alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
         printf("Open PCM: %s\n", bluealsa_device);
         write_err = snd_pcm_open(write_handle, bluealsa_device,
                                  SND_PCM_STREAM_PLAYBACK, 0);
+    } else if (device_flag == DEVICE_FLAG_BLUETOOTH_BSA) {
+        *socket_fd = RK_socket_client_setup(sock_path);
+        if (*socket_fd < 0)
+            printf("Fail to connect server socket\n");
+        else
+            printf("Socket client connected\n");
+
+        return;
     } else {
         printf("Open PCM: %s\n", WRITE_DEVICE_NAME);
         write_err = snd_pcm_open(write_handle, WRITE_DEVICE_NAME,
@@ -334,8 +353,10 @@ int get_device_flag()
     FILE *pp = NULL; /* pipeline */
     char *bt_mac_addr = NULL;
 
-    if (g_bt_is_connect)
+    if (g_bt_is_connect == BT_CONNECT_BLUEZ)
         return DEVICE_FLAG_BLUETOOTH;
+    else if(g_bt_is_connect == BT_CONNECT_BSA)
+        return DEVICE_FLAG_BLUETOOTH_BSA;
 
     fd = open(path, O_RDONLY);
     if (fd < 0) {
@@ -410,21 +431,29 @@ void *a2dp_status_listen(void *arg)
     }
 
     while(1) {
+        addr_len = sizeof(clientAddr);
         memset(buff, 0, sizeof(buff));
         ret = recvfrom(sockfd, buff, sizeof(buff), 0, (struct sockaddr *)&clientAddr, &addr_len);
-        if (ret <= 0)
+        if (ret <= 0) {
+            printf("errno: %s\n", strerror(errno));
             break;
+        }
         printf("###### FUCN:%s. Received a malformed message(%s)\n", __func__, buff);
 
-        if (strstr(buff, "status:connect")) {
+        if (strstr(buff, "status:connect:bsa-source")) {
+            if (g_bt_is_connect == BT_DISCONNECT) {
+                printf("bsa bluetooth source is connect\n");
+                g_bt_is_connect = BT_CONNECT_BSA;
+            }
+        } else if (strstr(buff, "status:connect")) {
             start = strstr(buff, "address:");
             if (start == NULL) {
                 printf("FUCN:%s. Received a malformed message(%s)\n", __func__, buff);
                 continue;
             }
             start += strlen("address:");
-            if (!g_bt_is_connect) {
-		sleep(2);
+            if (g_bt_is_connect == BT_DISCONNECT) {
+                sleep(2);
                 memcpy(g_bt_mac_addr, start, sizeof(g_bt_mac_addr));
                 sprintf(bluealsa_device, "%s%s", "bluealsa:HCI=hci0,PROFILE=a2dp,DEV=",
                         g_bt_mac_addr);
@@ -434,13 +463,13 @@ void *a2dp_status_listen(void *arg)
                                        SND_PCM_STREAM_PLAYBACK, 0);
                     if (ret == 0) {
                         snd_pcm_close(audio_bt_handle);
-                        g_bt_is_connect = 1;
+                        g_bt_is_connect = BT_CONNECT_BLUEZ;
                     }
                     usleep(600000); //600ms * 5 = 3s.
                 }
             }
         } else if (strstr(buff, "status:disconnect")) {
-            g_bt_is_connect = 0;
+            g_bt_is_connect = BT_DISCONNECT;
         } else if (strstr(buff, "status:suspend")) {
             g_system_sleep = true;
         } else if (strstr(buff, "status:resume")) {
@@ -456,20 +485,18 @@ void *a2dp_status_listen(void *arg)
 
 int main()
 {
-    snd_pcm_t *capture_handle;
-    snd_pcm_t *write_handle;
     int err;
+    snd_pcm_t *capture_handle, *write_handle;
     short buffer[READ_FRAME * 2];
-    unsigned int sampleRate;
-    unsigned int channels;
-    int mute_frame_thd;
-    int mute_frame;
+    unsigned int sampleRate, channels;
+    int mute_frame_thd, mute_frame;
     /* LINE_OUT is the default output device */
     int device_flag, new_flag;
     pthread_t a2dp_status_listen_thread;
     struct rk_wake_lock* wake_lock;
     bool low_power_mode = low_power_mode_check();
     char *silence_data = (char *)calloc(READ_FRAME * 2 * 2, 1);//2ch 16bit
+    int socket_fd = -1;
 
     wake_lock = RK_wake_lock_new("eq_drc_process");
 
@@ -491,7 +518,7 @@ repeat:
 
     printf("\n==========EQ/DRC process release version 1.23===============\n");
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
-    alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag);
+    alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
     RK_acquire_wake_lock(wake_lock);
 
     while (1) {
@@ -547,45 +574,76 @@ repeat:
             }
         }
 
-        while (write_handle == NULL) {
+        while (write_handle == NULL && socket_fd < 0) {
             RK_acquire_wake_lock(wake_lock);
-            alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag);
-            if (write_handle == NULL) {
+            alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
+            if (write_handle == NULL && socket_fd < 0) {
                 printf("Route change failed! Using default audio path.\n");
                 device_flag = DEVICE_FLAG_LINE_OUT;
             }
+
             if (low_power_mode) {
-		int i, num = PERIOD_counts / 2;
+                int i, num = PERIOD_counts / 2;
                 printf("feed mute data %d frame\n", num);
                 for (i = 0; i < num; i++) {
-                    err = snd_pcm_writei(write_handle, silence_data, READ_FRAME);
-                    if(err != READ_FRAME)
-                        printf("====write frame error = %d, not %d\n",err, READ_FRAME);
+                    if(write_handle != NULL) {
+                        err = snd_pcm_writei(write_handle, silence_data, READ_FRAME);
+                        if(err != READ_FRAME)
+                            printf("====write frame error = %d, not %d\n", err, READ_FRAME);
+                    } else if (socket_fd >= 0) {
+                        err = RK_socket_send(socket_fd, silence_data, READ_FRAME * 4); //2ch 16bit
+                        if(err != (READ_FRAME * 4))
+                            printf("====write frame error = %d, not %d\n", err, READ_FRAME * 4);
+                    }
                 }
             }
         }
 
-        //usleep(30*1000);
-        err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
-        if(err != READ_FRAME)
-            printf("====write frame error = %d===\n",err);
+        if(write_handle != NULL) {
+            //usleep(30*1000);
+            err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
+            if(err != READ_FRAME)
+                printf("====write frame error = %d===\n",err);
 
-        if (err < 0) {
-            if (err == -EPIPE)
-                printf("Underrun occurred from write: %d\n", err);
-
-            err = snd_pcm_recover(write_handle, err, 0);
             if (err < 0) {
-                printf( "Error occured while writing: %s\n", snd_strerror(err));
-                usleep(200 * 1000);
+                if (err == -EPIPE)
+                    printf("Underrun occurred from write: %d\n", err);
 
-                if (write_handle) {
-                    snd_pcm_close(write_handle);
-                    write_handle = NULL;
+                err = snd_pcm_recover(write_handle, err, 0);
+                if (err < 0) {
+                    printf( "Error occured while writing: %s\n", snd_strerror(err));
+                    usleep(200 * 1000);
+
+                    if (write_handle) {
+                        snd_pcm_close(write_handle);
+                        write_handle = NULL;
+                    }
+
+                    if (device_flag == DEVICE_FLAG_BLUETOOTH)
+                        g_bt_is_connect = BT_DISCONNECT;
                 }
+            }
+        }else if (socket_fd >= 0) {
+            if (g_bt_is_connect == BT_CONNECT_BSA) {
+                err = RK_socket_send(socket_fd, (char *)buffer, READ_FRAME * 4);
+                if (err != READ_FRAME * 4)
+                    printf("====write frame error = %d===\n", err);
 
-                if (device_flag == DEVICE_FLAG_BLUETOOTH)
-                    g_bt_is_connect = 0;
+                if (err < 0) {
+                    if (socket_fd >= 0) {
+                        printf("socket send err: %d, teardown client socket\n", err);
+                        RK_socket_client_teardown(socket_fd);
+                        socket_fd = -1;
+                    }
+
+                    g_bt_is_connect = BT_DISCONNECT;
+                }
+            } else {
+                if(socket_fd >= 0){
+                    printf("bsa bluetooth source disconnect, teardown client socket\n");
+                    RK_socket_client_teardown(socket_fd);
+                    socket_fd = -1;
+                }
             }
         }
     }
@@ -593,8 +651,12 @@ repeat:
 error:
     if (capture_handle)
         snd_pcm_close(capture_handle);
+
     if (write_handle)
         snd_pcm_close(write_handle);
+
+    if (socket_fd >= 0)
+        RK_socket_client_teardown(socket_fd);
 
     pthread_cancel(a2dp_status_listen_thread);
     pthread_join(a2dp_status_listen_thread, NULL);
