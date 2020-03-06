@@ -600,6 +600,7 @@ repeat:
             if (err < 0 || (write_handle == NULL && socket_fd < 0)) {
                 printf("[EQ] Route change failed! Using default audio path.\n");
                 device_flag = DEVICE_FLAG_LINE_OUT;
+                g_bt_is_connect = BT_DISCONNECT;
             }
 
             if (low_power_mode) {
