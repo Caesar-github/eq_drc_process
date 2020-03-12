@@ -3,11 +3,12 @@
 #include <iostream>
 #include <vector>
 #include <errno.h>
-
 #include <alsa/asoundlib.h>
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+
+#include "eq_log.h"
 #include "Rk_wake_lock.h"
 #include "Rk_socket_app.h"
 
@@ -65,87 +66,87 @@ void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32
     err = snd_pcm_open(capture_handle, REC_DEVICE_NAME, SND_PCM_STREAM_CAPTURE, 0);
     if (err)
     {
-        printf("[EQ_RECORD_OPEN] Unable to open capture PCM device\n");
+        eq_err("[EQ_RECORD_OPEN] Unable to open capture PCM device\n");
         exit(1);
     }
-    printf("[EQ_RECORD_OPEN] snd_pcm_open\n");
+    eq_debug("[EQ_RECORD_OPEN] snd_pcm_open\n");
     //err = snd_pcm_hw_params_alloca(&hw_params);
 
     err = snd_pcm_hw_params_malloc(&hw_params);
     if(err)
     {
-        printf("[EQ_RECORD_OPEN] cannot allocate hardware parameter structure (%s)\n", snd_strerror(err));
+        eq_err("[EQ_RECORD_OPEN] cannot allocate hardware parameter structure (%s)\n", snd_strerror(err));
         exit(1);
     }
-    printf("[EQ_RECORD_OPEN] snd_pcm_hw_params_malloc\n");
+    eq_debug("[EQ_RECORD_OPEN] snd_pcm_hw_params_malloc\n");
 
     err = snd_pcm_hw_params_any(*capture_handle, hw_params);
     if(err)
     {
-        printf("[EQ_RECORD_OPEN] cannot initialize hardware parameter structure (%s)\n", snd_strerror(err));
+        eq_err("[EQ_RECORD_OPEN] cannot initialize hardware parameter structure (%s)\n", snd_strerror(err));
         exit(1);
     }
-    printf("[EQ_RECORD_OPEN] snd_pcm_hw_params_any!\n");
+    eq_debug("[EQ_RECORD_OPEN] snd_pcm_hw_params_any!\n");
 
     err = snd_pcm_hw_params_set_access(*capture_handle, hw_params, SND_PCM_ACCESS_RW_INTERLEAVED);
     // err = snd_pcm_hw_params_set_access(*capture_handle, hw_params, SND_PCM_ACCESS_MMAP_NONINTERLEAVED);
     if (err)
     {
-        printf("[EQ_RECORD_OPEN] Error setting interleaved mode\n");
+        eq_err("[EQ_RECORD_OPEN] Error setting interleaved mode\n");
         exit(1);
     }
-    printf("[EQ_RECORD_OPEN] snd_pcm_hw_params_set_access!\n");
+    eq_debug("[EQ_RECORD_OPEN] snd_pcm_hw_params_set_access!\n");
 
     err = snd_pcm_hw_params_set_format(*capture_handle, hw_params, ALSA_READ_FORMAT);
     if (err)
     {
-        printf("[EQ_RECORD_OPEN] Error setting format: %s\n", snd_strerror(err));
+        eq_err("[EQ_RECORD_OPEN] Error setting format: %s\n", snd_strerror(err));
         exit(1);
     }
-    printf("[EQ_RECORD_OPEN] snd_pcm_hw_params_set_format\n");
+    eq_debug("[EQ_RECORD_OPEN] snd_pcm_hw_params_set_format\n");
 
     err = snd_pcm_hw_params_set_channels(*capture_handle, hw_params, channels);
     if (err)
     {
-        printf("[EQ_RECORD_OPEN] channels = %d\n",channels);
-        printf("[EQ_RECORD_OPEN] Error setting channels: %s\n", snd_strerror(err));
+        eq_debug("[EQ_RECORD_OPEN] channels = %d\n",channels);
+        eq_err("[EQ_RECORD_OPEN] Error setting channels: %s\n", snd_strerror(err));
         exit(1);
     }
-    printf("[EQ_RECORD_OPEN] channels = %d\n",channels);
+    eq_debug("[EQ_RECORD_OPEN] channels = %d\n",channels);
 
     err = snd_pcm_hw_params_set_buffer_size_near(*capture_handle, hw_params, &bufferSize);
     if (err)
     {
-        printf("[EQ_RECORD_OPEN] Error setting buffer size (%d): %s\n", bufferSize, snd_strerror(err));
+        eq_err("[EQ_RECORD_OPEN] Error setting buffer size (%d): %s\n", bufferSize, snd_strerror(err));
         exit(1);
     }
-    printf("[EQ_RECORD_OPEN] bufferSize = %d\n",bufferSize);
+    eq_debug("[EQ_RECORD_OPEN] bufferSize = %d\n",bufferSize);
 
     err = snd_pcm_hw_params_set_period_size_near(*capture_handle, hw_params, &periodSize, 0);
     if (err)
     {
-        printf("[EQ_RECORD_OPEN] Error setting period time (%d): %s\n", periodSize, snd_strerror(err));
+        eq_err("[EQ_RECORD_OPEN] Error setting period time (%d): %s\n", periodSize, snd_strerror(err));
         exit(1);
     }
-    printf("[EQ_RECORD_OPEN] periodSize = %d\n",periodSize);
+    eq_debug("[EQ_RECORD_OPEN] periodSize = %d\n",periodSize);
 
     err = snd_pcm_hw_params_set_rate_near(*capture_handle, hw_params, &rate, 0/*&dir*/);
     if (err)
     {
-        printf("[EQ_RECORD_OPEN] Error setting sampling rate (%d): %s\n", rate, snd_strerror(err));
+        eq_err("[EQ_RECORD_OPEN] Error setting sampling rate (%d): %s\n", rate, snd_strerror(err));
         exit(1);
     }
-    printf("[EQ_RECORD_OPEN] Rate = %d\n", rate);
+    eq_debug("[EQ_RECORD_OPEN] Rate = %d\n", rate);
 
     /* Write the parameters to the driver */
     err = snd_pcm_hw_params(*capture_handle, hw_params);
     if (err < 0)
     {
-        printf("[EQ_RECORD_OPEN] Unable to set HW parameters: %s\n", snd_strerror(err));
+        eq_err("[EQ_RECORD_OPEN] Unable to set HW parameters: %s\n", snd_strerror(err));
         exit(1);
     }
 
-    printf("[EQ_RECORD_OPEN] Open record device done \n");
+    eq_debug("[EQ_RECORD_OPEN] Open record device done \n");
     //if(set_sw_params(*capture_handle,bufferSize,periodSize,NULL) < 0)
     //    exit(1);
 
@@ -165,103 +166,103 @@ int alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
     char bluealsa_device[256] = {0};
 
     if (device_flag == DEVICE_FLAG_HEAD_SET) {
-        printf("[EQ_WRITE_OPEN] Open PCM: %s\n", JACK_DEVICE_NAME);
+        eq_debug("[EQ_WRITE_OPEN] Open PCM: %s\n", JACK_DEVICE_NAME);
         write_err = snd_pcm_open(write_handle, JACK_DEVICE_NAME,
                                  SND_PCM_STREAM_PLAYBACK, 0);
     } else if (device_flag == DEVICE_FLAG_BLUETOOTH) {
         sprintf(bluealsa_device, "%s%s", "bluealsa:HCI=hci0,PROFILE=a2dp,DEV=",
                 g_bt_mac_addr);
-        printf("[EQ_WRITE_OPEN] Open PCM: %s\n", bluealsa_device);
+        eq_debug("[EQ_WRITE_OPEN] Open PCM: %s\n", bluealsa_device);
         write_err = snd_pcm_open(write_handle, bluealsa_device,
                                  SND_PCM_STREAM_PLAYBACK, 0);
     } else if (device_flag == DEVICE_FLAG_BLUETOOTH_BSA) {
         *socket_fd = RK_socket_client_setup(sock_path);
         if (*socket_fd < 0) {
-            printf("[EQ_WRITE_OPEN] Fail to connect server socket\n");
+            eq_err("[EQ_WRITE_OPEN] Fail to connect server socket\n");
             return -1;
         } else {
-            printf("[EQ_WRITE_OPEN] Socket client connected\n");
+            eq_debug("[EQ_WRITE_OPEN] Socket client connected\n");
             return 0;
         }
     } else {
-        printf("[EQ_WRITE_OPEN] Open PCM: %s\n", WRITE_DEVICE_NAME);
+        eq_debug("[EQ_WRITE_OPEN] Open PCM: %s\n", WRITE_DEVICE_NAME);
         write_err = snd_pcm_open(write_handle, WRITE_DEVICE_NAME,
                                  SND_PCM_STREAM_PLAYBACK, 0);
     }
 
     if (write_err) {
-        printf("[EQ_WRITE_OPEN] Unable to open playback PCM device\n");
+        eq_err("[EQ_WRITE_OPEN] Unable to open playback PCM device\n");
         return -1;
     }
-    printf("[EQ_WRITE_OPEN] interleaved mode\n");
+    eq_debug("[EQ_WRITE_OPEN] interleaved mode\n");
 
     // snd_pcm_hw_params_alloca(&write_params);
     snd_pcm_hw_params_malloc(&write_params);
-    printf("[EQ_WRITE_OPEN] snd_pcm_hw_params_alloca\n");
+    eq_debug("[EQ_WRITE_OPEN] snd_pcm_hw_params_alloca\n");
 
     snd_pcm_hw_params_any(*write_handle, write_params);
 
     write_err = snd_pcm_hw_params_set_access(*write_handle, write_params, SND_PCM_ACCESS_RW_INTERLEAVED);
     //write_err = snd_pcm_hw_params_set_access(*write_handle,  write_params, SND_PCM_ACCESS_MMAP_NONINTERLEAVED);
     if (write_err) {
-        printf("[EQ_WRITE_OPEN] Error setting interleaved mode\n");
+        eq_err("[EQ_WRITE_OPEN] Error setting interleaved mode\n");
         goto failed;
     }
-    printf( "[EQ_WRITE_OPEN] interleaved mode\n");
+    eq_debug( "[EQ_WRITE_OPEN] interleaved mode\n");
 
     write_err = snd_pcm_hw_params_set_format(*write_handle, write_params, ALSA_WRITE_FORMAT);
     if (write_err) {
-        printf("[EQ_WRITE_OPEN] Error setting format: %s\n", snd_strerror(write_err));
+        eq_err("[EQ_WRITE_OPEN] Error setting format: %s\n", snd_strerror(write_err));
         goto failed;
     }
-    printf("[EQ_WRITE_OPEN] format successed\n");
+    eq_debug("[EQ_WRITE_OPEN] format successed\n");
 
     write_err = snd_pcm_hw_params_set_channels(*write_handle, write_params, channels);
     if (write_err) {
-        printf( "[EQ_WRITE_OPEN] Error setting channels: %s\n", snd_strerror(write_err));
+        eq_err( "[EQ_WRITE_OPEN] Error setting channels: %s\n", snd_strerror(write_err));
         goto failed;
     }
-    printf("[EQ_WRITE_OPEN] channels = %d\n", channels);
+    eq_debug("[EQ_WRITE_OPEN] channels = %d\n", channels);
 
     write_err = snd_pcm_hw_params_set_rate_near(*write_handle, write_params, &write_sampleRate, 0/*&write_dir*/);
     if (write_err) {
-        printf("[EQ_WRITE_OPEN] Error setting sampling rate (%d): %s\n", write_sampleRate, snd_strerror(write_err));
+        eq_err("[EQ_WRITE_OPEN] Error setting sampling rate (%d): %s\n", write_sampleRate, snd_strerror(write_err));
         goto failed;
     }
-    printf("[EQ_WRITE_OPEN] setting sampling rate (%d)\n", write_sampleRate);
+    eq_debug("[EQ_WRITE_OPEN] setting sampling rate (%d)\n", write_sampleRate);
 
     write_err = snd_pcm_hw_params_set_buffer_size_near(*write_handle, write_params, &write_bufferSize);
     if (write_err) {
-        printf("[EQ_WRITE_OPEN] Error setting buffer size (%ld): %s\n", write_bufferSize, snd_strerror(write_err));
+        eq_err("[EQ_WRITE_OPEN] Error setting buffer size (%ld): %s\n", write_bufferSize, snd_strerror(write_err));
         goto failed;
     }
-    printf("[EQ_WRITE_OPEN] write_bufferSize = %d\n", write_bufferSize);
+    eq_debug("[EQ_WRITE_OPEN] write_bufferSize = %d\n", write_bufferSize);
 
     write_err = snd_pcm_hw_params_set_period_size_near(*write_handle, write_params, &write_periodSize, 0);
     if (write_err) {
-        printf("[EQ_WRITE_OPEN] Error setting period time (%ld): %s\n", write_periodSize, snd_strerror(write_err));
+        eq_err("[EQ_WRITE_OPEN] Error setting period time (%ld): %s\n", write_periodSize, snd_strerror(write_err));
         goto failed;
     }
-    printf("[EQ_WRITE_OPEN] write_periodSize = %d\n", write_periodSize);
+    eq_debug("[EQ_WRITE_OPEN] write_periodSize = %d\n", write_periodSize);
 
 #if 0
     snd_pcm_uframes_t write_final_buffer;
     write_err = snd_pcm_hw_params_get_buffer_size(write_params, &write_final_buffer);
-    printf(" final buffer size %ld \n" , write_final_buffer);
+    eq_debug(" final buffer size %ld \n" , write_final_buffer);
 
     snd_pcm_uframes_t write_final_period;
     write_err = snd_pcm_hw_params_get_period_size(write_params, &write_final_period, &write_dir);
-    printf(" final period size %ld \n" , write_final_period);
+    eq_debug(" final period size %ld \n" , write_final_period);
 #endif
 
     /* Write the parameters to the driver */
     write_err = snd_pcm_hw_params(*write_handle, write_params);
     if (write_err < 0) {
-        printf("[EQ_WRITE_OPEN] Unable to set HW parameters: %s\n", snd_strerror(write_err));
+        eq_err("[EQ_WRITE_OPEN] Unable to set HW parameters: %s\n", snd_strerror(write_err));
         goto failed;
     }
 
-    printf("[EQ_WRITE_OPEN] open write device is successful\n");
+    eq_debug("[EQ_WRITE_OPEN] open write device is successful\n");
     if(set_sw_params(*write_handle, write_bufferSize, write_periodSize, NULL) < 0)
         goto failed;
 
@@ -290,25 +291,25 @@ int set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t buffer_size,
     //snd_pcm_sw_params_alloca(&params);
     snd_pcm_sw_params_malloc(&params);
     if ((err = snd_pcm_sw_params_current(pcm, params)) != 0) {
-        printf("[EQ_SET_SW_PARAMS] Get current params: %s\n", snd_strerror(err));
+        eq_err("[EQ_SET_SW_PARAMS] Get current params: %s\n", snd_strerror(err));
         goto failed;
     }
 
     /* start the transfer when the buffer is full (or almost full) */
     threshold = (buffer_size / period_size) * period_size;
     if ((err = snd_pcm_sw_params_set_start_threshold(pcm, params, threshold)) != 0) {
-        printf("[EQ_SET_SW_PARAMS] Set start threshold: %s: %lu\n", snd_strerror(err), threshold);
+        eq_err("[EQ_SET_SW_PARAMS] Set start threshold: %s: %lu\n", snd_strerror(err), threshold);
         goto failed;
     }
 
     /* allow the transfer when at least period_size samples can be processed */
     if ((err = snd_pcm_sw_params_set_avail_min(pcm, params, period_size)) != 0) {
-        printf("[EQ_SET_SW_PARAMS] Set avail min: %s: %lu\n", snd_strerror(err), period_size);
+        eq_err("[EQ_SET_SW_PARAMS] Set avail min: %s: %lu\n", snd_strerror(err), period_size);
         goto failed;
     }
 
     if ((err = snd_pcm_sw_params(pcm, params)) != 0) {
-        printf("[EQ_SET_SW_PARAMS] %s\n", snd_strerror(err));
+        eq_err("[EQ_SET_SW_PARAMS] %s\n", snd_strerror(err));
         goto failed;
     }
 
@@ -330,7 +331,7 @@ int is_mute_frame(short *in,unsigned int size)
     int mute_count = 0;
 
     if (!size) {
-        printf("frame size is zero!!!\n");
+        eq_err("frame size is zero!!!\n");
         return 0;
     }
     for (i = 0; i < size;i ++) {
@@ -373,13 +374,13 @@ int get_device_flag()
 
     fd = open(path, O_RDONLY);
     if (fd < 0) {
-        printf("[EQ_DEVICE_FLAG] Open %s failed!\n", path);
+        eq_err("[EQ_DEVICE_FLAG] Open %s failed!\n", path);
         return device_flag;
     }
 
     ret = read(fd, buff, sizeof(buff));
     if (ret <= 0) {
-        printf("[EQ_DEVICE_FLAG] Read %s failed!\n", path);
+        eq_err("[EQ_DEVICE_FLAG] Read %s failed!\n", path);
         close(fd);
         return device_flag;
     }
@@ -430,7 +431,7 @@ void *a2dp_status_listen(void *arg)
 
     sockfd = socket(AF_UNIX, SOCK_DGRAM, 0);
     if (sockfd < 0) {
-        printf("[EQ_A2DP_LISTEN] Create socket failed!\n");
+        eq_err("[EQ_A2DP_LISTEN] Create socket failed!\n");
         return NULL;
     }
 
@@ -440,7 +441,7 @@ void *a2dp_status_listen(void *arg)
     system("rm -rf /tmp/a2dp_master_status");
     ret = bind(sockfd, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
     if (ret < 0) {
-        printf("[EQ_A2DP_LISTEN] Bind Local addr failed!\n");
+        eq_err("[EQ_A2DP_LISTEN] Bind Local addr failed!\n");
         return NULL;
     }
 
@@ -449,20 +450,20 @@ void *a2dp_status_listen(void *arg)
         memset(buff, 0, sizeof(buff));
         ret = recvfrom(sockfd, buff, sizeof(buff), 0, (struct sockaddr *)&clientAddr, &addr_len);
         if (ret <= 0) {
-            printf("[EQ_A2DP_LISTEN]: %s\n", strerror(errno));
+            eq_err("[EQ_A2DP_LISTEN]: %s\n", strerror(errno));
             break;
         }
-        printf("[EQ_A2DP_LISTEN] Received a message(%s)\n", buff);
+        eq_debug("[EQ_A2DP_LISTEN] Received a message(%s)\n", buff);
 
         if (strstr(buff, "status:connect:bsa-source")) {
             if (g_bt_is_connect == BT_DISCONNECT) {
-                printf("[EQ_A2DP_LISTEN] bsa bluetooth source is connect\n");
+                eq_debug("[EQ_A2DP_LISTEN] bsa bluetooth source is connect\n");
                 g_bt_is_connect = BT_CONNECT_BSA;
             }
         } else if (strstr(buff, "status:connect")) {
             start = strstr(buff, "address:");
             if (start == NULL) {
-                printf("[EQ_A2DP_LISTEN] Received a malformed connect message(%s)\n", buff);
+                eq_debug("[EQ_A2DP_LISTEN] Received a malformed connect message(%s)\n", buff);
                 continue;
             }
             start += strlen("address:");
@@ -473,7 +474,7 @@ void *a2dp_status_listen(void *arg)
                         g_bt_mac_addr);
                 retry_cnt = 5;
                 while (retry_cnt--) {
-                    printf("[EQ_A2DP_LISTEN] try open bluealsa device(%d)\n", retry_cnt + 1);
+                    eq_debug("[EQ_A2DP_LISTEN] try open bluealsa device(%d)\n", retry_cnt + 1);
                     ret = snd_pcm_open(&audio_bt_handle, bluealsa_device,
                                        SND_PCM_STREAM_PLAYBACK, 0);
                     if (ret == 0) {
@@ -491,7 +492,7 @@ void *a2dp_status_listen(void *arg)
         } else if (strstr(buff, "status:resume")) {
             g_system_sleep = false;
         } else {
-            printf("[EQ_A2DP_LISTEN] Received a malformed message(%s)\n", buff);
+            eq_debug("[EQ_A2DP_LISTEN] Received a malformed message(%s)\n", buff);
         }
     }
 
@@ -532,28 +533,30 @@ repeat:
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
 
-    printf("\n==========EQ/DRC process release version 1.23===============\n");
+    eq_debug("\n==========EQ/DRC process release version 1.23===============\n");
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
-    if(err < 0)
+    if(err < 0) {
+        eq_err("first open playback device failed, exit eq\n");
         return -1;
+    }
 
     RK_acquire_wake_lock(wake_lock);
 
     while (1) {
         err = snd_pcm_readi(capture_handle, buffer , READ_FRAME);
         if (err != READ_FRAME)
-            printf("====[EQ] read frame error = %d===\n",err);
+            eq_err("====[EQ] read frame error = %d===\n",err);
 
         if (err < 0) {
             if (err == -EPIPE)
-                printf( "[EQ] Overrun occurred: %d\n", err);
+                eq_err("[EQ] Overrun occurred: %d\n", err);
 
             err = snd_pcm_recover(capture_handle, err, 0);
             // Still an error, need to exit.
             if (err < 0) {
-                printf( "[EQ] Error occured while recording: %s\n", snd_strerror(err));
+                eq_err("[EQ] Error occured while recording: %s\n", snd_strerror(err));
                 usleep(200 * 1000);
                 if (capture_handle)
                     snd_pcm_close(capture_handle);
@@ -577,7 +580,7 @@ repeat:
             if (write_handle) {
                 snd_pcm_close(write_handle);
                 RK_release_wake_lock(wake_lock);
-                printf("[EQ] %d second no playback,close write handle for you!!!\n ", MUTE_TIME_THRESHOD);
+                eq_err("[EQ] %d second no playback,close write handle for you!!!\n ", MUTE_TIME_THRESHOD);
                 write_handle = NULL;
             }
             continue;
@@ -585,7 +588,7 @@ repeat:
 
         new_flag = get_device_flag();
         if (new_flag != device_flag) {
-            printf("\n[EQ] Device route changed, frome\"%s\" to \"%s\"\n\n",
+            eq_debug("\n[EQ] Device route changed, frome\"%s\" to \"%s\"\n\n",
                    get_device_name(device_flag), get_device_name(new_flag));
             device_flag = new_flag;
             if (write_handle) {
@@ -598,23 +601,23 @@ repeat:
             RK_acquire_wake_lock(wake_lock);
             err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
             if (err < 0 || (write_handle == NULL && socket_fd < 0)) {
-                printf("[EQ] Route change failed! Using default audio path.\n");
+                eq_err("[EQ] Route change failed! Using default audio path.\n");
                 device_flag = DEVICE_FLAG_LINE_OUT;
                 g_bt_is_connect = BT_DISCONNECT;
             }
 
             if (low_power_mode) {
                 int i, num = PERIOD_counts / 2;
-                printf("[EQ] feed mute data %d frame\n", num);
+                eq_debug("[EQ] feed mute data %d frame\n", num);
                 for (i = 0; i < num; i++) {
                     if(write_handle != NULL) {
                         err = snd_pcm_writei(write_handle, silence_data, READ_FRAME);
                         if(err != READ_FRAME)
-                            printf("====[EQ] write frame error = %d, not %d\n", err, READ_FRAME);
+                            eq_err("====[EQ] write frame error = %d, not %d\n", err, READ_FRAME);
                     } else if (socket_fd >= 0) {
                         err = RK_socket_send(socket_fd, silence_data, READ_FRAME * 4); //2ch 16bit
                         if(err != (READ_FRAME * 4))
-                            printf("====[EQ] write frame error = %d, not %d\n", err, READ_FRAME * 4);
+                            eq_err("====[EQ] write frame error = %d, not %d\n", err, READ_FRAME * 4);
                     }
                 }
             }
@@ -624,15 +627,15 @@ repeat:
             //usleep(30*1000);
             err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
             if(err != READ_FRAME)
-                printf("====[EQ] write frame error = %d===\n",err);
+                eq_err("====[EQ] write frame error = %d===\n",err);
 
             if (err < 0) {
                 if (err == -EPIPE)
-                    printf("[EQ] Underrun occurred from write: %d\n", err);
+                    eq_err("[EQ] Underrun occurred from write: %d\n", err);
 
                 err = snd_pcm_recover(write_handle, err, 0);
                 if (err < 0) {
-                    printf( "[EQ] Error occured while writing: %s\n", snd_strerror(err));
+                    eq_err( "[EQ] Error occured while writing: %s\n", snd_strerror(err));
                     usleep(200 * 1000);
 
                     if (write_handle) {
@@ -648,11 +651,11 @@ repeat:
             if (g_bt_is_connect == BT_CONNECT_BSA) {
                 err = RK_socket_send(socket_fd, (char *)buffer, READ_FRAME * 4);
                 if (err != READ_FRAME * 4)
-                    printf("====[EQ] write frame error = %d===\n", err);
+                    eq_err("====[EQ] write frame error = %d===\n", err);
 
                 if (err < 0) {
                     if (socket_fd >= 0) {
-                        printf("[EQ] socket send err: %d, teardown client socket\n", err);
+                        eq_err("[EQ] socket send err: %d, teardown client socket\n", err);
                         RK_socket_client_teardown(socket_fd);
                         socket_fd = -1;
                     }
@@ -661,7 +664,7 @@ repeat:
                 }
             } else {
                 if(socket_fd >= 0){
-                    printf("[EQ] bsa bt source disconnect, teardown client socket\n");
+                    eq_debug("[EQ] bsa bt source disconnect, teardown client socket\n");
                     RK_socket_client_teardown(socket_fd);
                     socket_fd = -1;
                 }
@@ -670,7 +673,7 @@ repeat:
     }
 
 error:
-    printf("=== [EQ] Exit eq ===\n");
+    eq_debug("=== [EQ] Exit eq ===\n");
     if (capture_handle)
         snd_pcm_close(capture_handle);
 

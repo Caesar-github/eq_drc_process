@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <string.h>
 #include <pthread.h>
+#include "eq_log.h"
 #include "Rk_wake_lock.h"
 
 struct rk_wake_lock {
@@ -15,7 +16,7 @@ struct rk_wake_lock {
 #define TAG "WAKE_LOCK"
 
 #define debug(fmt, args...) \
-    printf(TAG "[%s] " fmt "\n", __func__, ##args)
+    eq_debug(TAG "[%s] " fmt "\n", __func__, ##args)
 
 enum {
 	ACQUIRE_PARTIAL_WAKE_LOCK = 0,
@@ -145,15 +146,15 @@ int RK_wait_all_wake_lock_release(int timeout_ms) {
 
 	while(cnt--) {
 		memset(result, 0, 1024);
-        exec("cat /sys/power/wake_lock", result, 1024);
+		exec("cat /sys/power/wake_lock", result, 1024);
 		if (strlen(result) <= 1) //换行符
 			break;
-        usleep(10*1000);
-        printf("## suspend waiting wake_lock: %s\n", result);
+		usleep(10*1000);
+		debug("## suspend waiting wake_lock: %s", result);
 	}
 	if (cnt == 0) {
-        printf("wait suspend timeout, abort suspend\n");
-        printf("unreleased wake_lock: %s\n", result);
+		debug("wait suspend timeout, abort suspend");
+		debug("unreleased wake_lock: %s", result);
 		return -1;
 	}
 	return 0;

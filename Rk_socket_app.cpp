@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <errno.h>
 
+#include "eq_log.h"
 #include "Rk_socket_app.h"
 
 #define LOG_TAG "RK_SOCKET_APP"
@@ -14,7 +15,7 @@
 #define LOG_PRINTF(level, format, ...) \
         do { \
                 if (level > LOG_DEBUG_LEVEL) { \
-                        printf("[%s]: " format, LOG_TAG, ##__VA_ARGS__); \
+                        eq_debug("[%s]: " format, LOG_TAG, ##__VA_ARGS__); \
                 } \
         } while(0)
 
@@ -138,7 +139,7 @@ int RK_socket_udp_send(char *socket_path, char *msg, int len) {
 
 	sockfd = socket(AF_UNIX, SOCK_DGRAM, 0);
 	if (sockfd < 0) {
-		printf("FUNC:%s create sockfd failed!\n", __func__);
+		log_err("FUNC:%s create sockfd failed!\n", __func__);
 		return 0;
 	}
 
