@@ -21,8 +21,8 @@
 #define JACK_DEVICE_NAME "fake_jack"
 #define READ_FRAME  1024    //(768)
 #define PERIOD_SIZE (1024)  //(SAMPLE_RATE/8)
-#define PERIOD_counts (20) //double of delay 200ms
-#define BUFFER_SIZE (PERIOD_SIZE * PERIOD_counts)
+#define PERIOD_counts (15) //double of delay 15*21.3=320ms
+#define BUFFER_SIZE (PERIOD_SIZE * 50) // keep a large buffer_size
 #define MUTE_TIME_THRESHOD (4)//seconds
 #define MUTE_FRAME_THRESHOD (SAMPLE_RATE * MUTE_TIME_THRESHOD / READ_FRAME)//30 seconds
 //#define ALSA_READ_FORMAT SND_PCM_FORMAT_S32_LE
@@ -646,7 +646,7 @@ repeat:
             }
 
             if (low_power_mode) {
-                int i, num = PERIOD_counts / 2;
+                int i, num = PERIOD_counts;
                 eq_debug("[EQ] feed mute data %d frame\n", num);
                 for (i = 0; i < num; i++) {
                     if(write_handle != NULL) {
