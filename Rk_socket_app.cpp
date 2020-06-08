@@ -5,7 +5,7 @@
 #include "eq_log.h"
 #include "Rk_socket_app.h"
 
-#define LOG_TAG "RK_SOCKET_APP"
+#define LOG_TAG "EQ_SOCKET_APP"
 #define LOG_DEBUG_LEVEL (1)
 #define LOG_ERROR_FLAG (4)
 #define LOG_WARING_FLAG (3)
@@ -24,23 +24,34 @@
 #define log_warn(format, ...) LOG_PRINTF(LOG_WARING_FLAG, format, ##__VA_ARGS__)
 #define log_err(format, ...) LOG_PRINTF(LOG_ERROR_FLAG, format, ##__VA_ARGS__)
 
-int RK_socket_server_setup(struct rk_socket_app *app_socket) {
+int RK_socket_server_setup(struct rk_socket_app *app_socket)
+{
+    int buflen = 1024*1024; //1M, default 8K
+    socklen_t optlen = 0;
+
     unlink (app_socket->sock_path);
     if ((app_socket->server_sockfd = socket (AF_UNIX, SOCK_STREAM, 0)) < 0) {
         log_err("fail to create socket\n");
         perror("socket");
         return -1;
     }
+
     app_socket->server_address.sun_family = AF_UNIX;
     strcpy (app_socket->server_address.sun_path, app_socket->sock_path);
     app_socket->server_len = sizeof (app_socket->server_address);
     app_socket->client_len = sizeof (app_socket->client_address);
+
     if ((bind (app_socket->server_sockfd, (struct sockaddr *)&app_socket->server_address, app_socket->server_len)) < 0) {
         log_err("fail to bind socket\n");
         perror("bind");
         return -1;
 
     }
+
+    setsockopt(app_socket->server_sockfd, SOL_SOCKET, SO_RCVBUF, (void*)&buflen, sizeof(int));
+    getsockopt(app_socket->server_sockfd, SOL_SOCKET, SO_RCVBUF, (void*)&buflen, &optlen);
+    log_info("%s: SO_RCVBUF buflen=%d, optlen=%d\n", __func__, buflen, optlen);
+
     if (listen (app_socket->server_sockfd, 10) < 0) {
         log_err("fail to listen socket\n");
         perror("listen");
@@ -77,12 +88,18 @@ void RK_socket_server_teardown(struct rk_socket_app *app_socket) {
 
 int RK_socket_client_setup(char *socket_path) {
     struct sockaddr_un address;
-    int sockfd,  len;
+    int sockfd, len;
+    int buflen = 1024*1024; //1M, default 8K
+    socklen_t optlen = 0;
 
     if ((sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
-        log_err("%s: can not creat socket\n", __func__);
+        log_err("%s: can not create socket\n", __func__);
         return -1;
     }
+
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, (void*)&buflen, sizeof(int));
+    getsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, (void*)&buflen, &optlen);
+    log_info("%s: SO_SNDBUF buflen=%d, optlen=%d\n", __func__, buflen, optlen);
 
     address.sun_family = AF_UNIX;
     strcpy (address.sun_path, socket_path);
@@ -109,9 +126,13 @@ int RK_socket_send(int sockfd, char *msg, int len) {
         log_err("%s: invalid sockfd\n",__func__);
         return -1;
     }
-    if ((bytes = send(sockfd, msg, len, 0)) < 0) {
-        log_err("fail to send\n");
-        perror ("send");
+    if ((bytes = send(sockfd, msg, len, MSG_DONTWAIT | MSG_NOSIGNAL)) < 0) {
+        if(errno != EAGAIN) {
+            log_err("fail to send\n");
+            perror("send");
+        }
+
+        bytes = 0 - errno;
     }
     return bytes;
 }

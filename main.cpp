@@ -4,6 +4,8 @@
 #include <vector>
 #include <errno.h>
 #include <alsa/asoundlib.h>
+#include <signal.h>
+#include <sys/epoll.h>
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -363,7 +365,11 @@ int get_device_flag()
     int fd = 0, ret = 0;
     char buff[512] = {0};
     int device_flag = DEVICE_FLAG_LINE_OUT;
+#if 1 //3308
     const char *path = "/sys/devices/platform/ff560000.acodec/rk3308-acodec-dev/dac_output";
+#else //3326
+    const char *path = "/sys/class/switch/h2w/state";
+#endif
     FILE *pp = NULL; /* pipeline */
     char *bt_mac_addr = NULL;
 
@@ -385,8 +391,13 @@ int get_device_flag()
         return device_flag;
     }
 
+#if 1 //3308
     if (strstr(buff, "hp out"))
         device_flag = DEVICE_FLAG_HEAD_SET;
+#else //3326
+    if (strstr(buff, "1"))
+        device_flag = DEVICE_FLAG_HEAD_SET;
+#endif
 
     close(fd);
 
@@ -500,6 +511,29 @@ void *a2dp_status_listen(void *arg)
     return NULL;
 }
 
+static void sigpipe_handler(int sig)
+{
+    eq_info("[EQ] catch the signal number: %d\n", sig);
+}
+
+static int signal_handler()
+{
+    struct sigaction sa;
+
+    /* Install signal handler for SIGPIPE */
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigpipe_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    if (sigaction(SIGPIPE, &sa, NULL) < 0) {
+        eq_err("sigaction() failed: %s", strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+
 int main()
 {
     int err;
@@ -516,6 +550,11 @@ int main()
     int socket_fd = -1;
 
     wake_lock = RK_wake_lock_new("eq_drc_process");
+
+    if(signal_handler() < 0) {
+        eq_err("[EQ] Install signal_handler for SIGPIPE failed\n");
+        return -1;
+    }
 
     /* Create a thread to listen for Bluetooth connection status. */
     pthread_create(&a2dp_status_listen_thread, NULL, a2dp_status_listen, NULL);
@@ -650,10 +689,10 @@ repeat:
         }else if (socket_fd >= 0) {
             if (g_bt_is_connect == BT_CONNECT_BSA) {
                 err = RK_socket_send(socket_fd, (char *)buffer, READ_FRAME * 4);
-                if (err != READ_FRAME * 4)
+                if (err != READ_FRAME * 4 && -EAGAIN != err)
                     eq_err("====[EQ] write frame error = %d===\n", err);
 
-                if (err < 0) {
+                if (err < 0 && -EAGAIN != err) {
                     if (socket_fd >= 0) {
                         eq_err("[EQ] socket send err: %d, teardown client socket\n", err);
                         RK_socket_client_teardown(socket_fd);
