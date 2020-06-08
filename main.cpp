@@ -607,7 +607,7 @@ repeat:
 
         if (g_system_sleep)
             mute_frame = mute_frame_thd;
-        else if(low_power_mode && is_mute_frame(buffer, READ_FRAME))
+        else if(low_power_mode && is_mute_frame(buffer, channels * READ_FRAME))
             mute_frame ++;
         else
             mute_frame = 0;
