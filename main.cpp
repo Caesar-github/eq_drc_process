@@ -19,6 +19,7 @@
 #define REC_DEVICE_NAME "fake_record"
 #define WRITE_DEVICE_NAME "fake_play"
 #define JACK_DEVICE_NAME "fake_jack"
+#define JACK2_DEVICE_NAME "fake_jack2"
 #define READ_FRAME  1024    //(768)
 #define PERIOD_SIZE (1024)  //(SAMPLE_RATE/8)
 #define PERIOD_counts (15) //double of delay 15*21.3=320ms
@@ -36,7 +37,8 @@
  *  BLUETOOTH: device as bluetooth source.
  */
 #define DEVICE_FLAG_LINE_OUT        0x01
-#define DEVICE_FLAG_HEAD_SET        0x02
+#define DEVICE_FLAG_ANALOG_HP       0x02
+#define DEVICE_FLAG_DIGITAL_HP      0x03
 #define DEVICE_FLAG_BLUETOOTH       0x04
 #define DEVICE_FLAG_BLUETOOTH_BSA   0x05
 
@@ -167,9 +169,13 @@ int alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
     int write_dir;
     char bluealsa_device[256] = {0};
 
-    if (device_flag == DEVICE_FLAG_HEAD_SET) {
+    if (device_flag == DEVICE_FLAG_ANALOG_HP) {
         eq_debug("[EQ_WRITE_OPEN] Open PCM: %s\n", JACK_DEVICE_NAME);
         write_err = snd_pcm_open(write_handle, JACK_DEVICE_NAME,
+                                 SND_PCM_STREAM_PLAYBACK, 0);
+    } else if (device_flag == DEVICE_FLAG_DIGITAL_HP) {
+        eq_debug("[EQ_WRITE_OPEN] Open PCM: %s\n", JACK2_DEVICE_NAME);
+        write_err = snd_pcm_open(write_handle, JACK2_DEVICE_NAME,
                                  SND_PCM_STREAM_PLAYBACK, 0);
     } else if (device_flag == DEVICE_FLAG_BLUETOOTH) {
         sprintf(bluealsa_device, "%s%s", "bluealsa:HCI=hci0,PROFILE=a2dp,DEV=",
@@ -393,10 +399,12 @@ int get_device_flag()
 
 #if 1 //3308
     if (strstr(buff, "hp out"))
-        device_flag = DEVICE_FLAG_HEAD_SET;
+        device_flag = DEVICE_FLAG_ANALOG_HP;
 #else //3326
     if (strstr(buff, "1"))
-        device_flag = DEVICE_FLAG_HEAD_SET;
+        device_flag = DEVICE_FLAG_ANALOG_HP;
+    else if (strstr(buff, "2"))
+        device_flag = DEVICE_FLAG_DIGITAL_HP;
 #endif
 
     close(fd);
@@ -414,8 +422,11 @@ const char *get_device_name(int device_flag)
         case DEVICE_FLAG_BLUETOOTH_BSA:
             device_name = "BLUETOOTH";
             break;
-        case DEVICE_FLAG_HEAD_SET:
+        case DEVICE_FLAG_ANALOG_HP:
             device_name = JACK_DEVICE_NAME;
+            break;
+        case DEVICE_FLAG_DIGITAL_HP:
+            device_name = JACK2_DEVICE_NAME;
             break;
         case DEVICE_FLAG_LINE_OUT:
             device_name = WRITE_DEVICE_NAME;
