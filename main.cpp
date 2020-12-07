@@ -14,6 +14,11 @@
 #include "Rk_wake_lock.h"
 #include "Rk_socket_app.h"
 
+#define SOC_IS_RK3308           (0x1)
+#define SOC_IS_RK3326           (0x2)
+
+#define ROCKCHIP_SOC            SOC_IS_RK3326
+
 #define SAMPLE_RATE 48000
 #define CHANNEL 2
 #define REC_DEVICE_NAME "fake_record"
@@ -371,9 +376,9 @@ int get_device_flag()
     int fd = 0, ret = 0;
     char buff[512] = {0};
     int device_flag = DEVICE_FLAG_LINE_OUT;
-#if 1 //3308
+#if (ROCKCHIP_SOC == SOC_IS_RK3308)
     const char *path = "/sys/devices/platform/ff560000.acodec/rk3308-acodec-dev/dac_output";
-#else //3326
+#else /* else is RK3326 */
     const char *path = "/sys/class/switch/h2w/state";
 #endif
     FILE *pp = NULL; /* pipeline */
@@ -397,10 +402,10 @@ int get_device_flag()
         return device_flag;
     }
 
-#if 1 //3308
+#if (ROCKCHIP_SOC == SOC_IS_RK3308)
     if (strstr(buff, "hp out"))
         device_flag = DEVICE_FLAG_ANALOG_HP;
-#else //3326
+#else /* else is RK3326 */
     if (strstr(buff, "1"))
         device_flag = DEVICE_FLAG_ANALOG_HP;
     else if (strstr(buff, "2"))
