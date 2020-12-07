@@ -560,12 +560,12 @@ int main()
     /* LINE_OUT is the default output device */
     int device_flag, new_flag;
     pthread_t a2dp_status_listen_thread;
-    struct rk_wake_lock* wake_lock;
+    // struct rk_wake_lock* wake_lock;
     bool low_power_mode = low_power_mode_check();
     char *silence_data = (char *)calloc(READ_FRAME * 2 * 2, 1);//2ch 16bit
     int socket_fd = -1;
 
-    wake_lock = RK_wake_lock_new("eq_drc_process");
+    // wake_lock = RK_wake_lock_new("eq_drc_process");
 
     if(signal_handler() < 0) {
         eq_err("[EQ] Install signal_handler for SIGPIPE failed\n");
@@ -597,7 +597,7 @@ repeat:
         return -1;
     }
 
-    RK_acquire_wake_lock(wake_lock);
+    // RK_acquire_wake_lock(wake_lock);
 
     while (1) {
         err = snd_pcm_readi(capture_handle, buffer , READ_FRAME);
@@ -634,7 +634,7 @@ repeat:
             mute_frame = mute_frame_thd;
             if (write_handle) {
                 snd_pcm_close(write_handle);
-                RK_release_wake_lock(wake_lock);
+                // RK_release_wake_lock(wake_lock);
                 eq_err("[EQ] %d second no playback,close write handle for you!!!\n ", MUTE_TIME_THRESHOD);
                 write_handle = NULL;
             }
@@ -653,7 +653,7 @@ repeat:
         }
 
         while (write_handle == NULL && socket_fd < 0) {
-            RK_acquire_wake_lock(wake_lock);
+            // RK_acquire_wake_lock(wake_lock);
             err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
             if (err < 0 || (write_handle == NULL && socket_fd < 0)) {
                 eq_err("[EQ] Route change failed! Using default audio path.\n");
