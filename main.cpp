@@ -25,11 +25,11 @@
 #define WRITE_DEVICE_NAME "fake_play"
 #define JACK_DEVICE_NAME "fake_jack"
 #define JACK2_DEVICE_NAME "fake_jack2"
-#define READ_FRAME  1024    //(768)
-#define PERIOD_SIZE (1024)  //(SAMPLE_RATE/8)
-#define PERIOD_counts (3) //double of delay 3*21.3=64ms
-#define BUFFER_SIZE (PERIOD_SIZE * 10) // keep a large buffer_size
-#define MUTE_TIME_THRESHOD (1)//seconds
+#define READ_FRAME  2048    //(768)
+#define PERIOD_SIZE (READ_FRAME)  //(SAMPLE_RATE/8)
+#define PERIOD_counts (8) //double of delay 3*21.3=64ms
+#define BUFFER_SIZE (PERIOD_SIZE * PERIOD_counts) // keep a large buffer_size
+#define MUTE_TIME_THRESHOD (5)//seconds
 #define MUTE_FRAME_THRESHOD (SAMPLE_RATE * MUTE_TIME_THRESHOD / READ_FRAME)//30 seconds
 //#define ALSA_READ_FORMAT SND_PCM_FORMAT_S32_LE
 #define ALSA_READ_FORMAT SND_PCM_FORMAT_S16_LE
@@ -554,9 +554,9 @@ int main()
 {
     int err;
     snd_pcm_t *capture_handle, *write_handle;
-    short buffer[READ_FRAME * 2];
+    short buffer[READ_FRAME * PERIOD_counts];
     unsigned int sampleRate, channels;
-    int mute_frame_thd, mute_frame;
+    int mute_frame_thd, mute_frame, skip_frame = 0;
     /* LINE_OUT is the default output device */
     int device_flag, new_flag;
     pthread_t a2dp_status_listen_thread;
@@ -580,6 +580,7 @@ repeat:
     write_handle = NULL;
     err = 0;
     memset(buffer, 0, sizeof(buffer));
+    memset((char *)silence_data, 0xff, sizeof(silence_data));
     sampleRate = SAMPLE_RATE;
     channels = CHANNEL;
     mute_frame_thd = (int)MUTE_FRAME_THRESHOD;
@@ -631,11 +632,26 @@ repeat:
         if(mute_frame >= mute_frame_thd) {
             //usleep(30*1000);
             /* Reassign to avoid overflow */
+            memset(buffer, 0, sizeof(buffer));
             mute_frame = mute_frame_thd;
             if (write_handle) {
+                // memset(buffer, 0, sizeof(buffer));
+                // err = snd_pcm_writei(write_handle, buffer, BUFFER_SIZE);
+                // if(err != BUFFER_SIZE)
+                //             eq_err("====[EQ] write frame error = %d, not %d\n", err, BUFFER_SIZE);
+
+                // int i, num = 8;
+                // for (i = 0; i < num; i++) {
+                //     if(write_handle != NULL) {
+                //         err = snd_pcm_writei(write_handle, silence_data, READ_FRAME);
+                //         if(err != READ_FRAME)
+                //             eq_err("====[EQ] write frame error = %d, not %d\n", err, READ_FRAME);
+                //     }
+                // }
+
                 snd_pcm_close(write_handle);
                 // RK_release_wake_lock(wake_lock);
-                eq_err("[EQ] %d second no playback,close write handle for you!!!\n ", MUTE_TIME_THRESHOD);
+                eq_err("[EQ] %d second no playback,close write handle for you dd!!!\n ", MUTE_TIME_THRESHOD);
                 write_handle = NULL;
             }
             continue;
@@ -661,8 +677,16 @@ repeat:
                 g_bt_is_connect = BT_DISCONNECT;
             }
 
-            if (low_power_mode) {
-                int i, num = PERIOD_counts;
+            skip_frame = 0;
+
+            // memset(buffer, 0xff, sizeof(buffer));
+
+            // if (capture_handle)
+            //         snd_pcm_close(capture_handle);
+            // alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
+
+            if (0 && low_power_mode) {
+                int i, num = 4;
                 eq_debug("[EQ] feed mute data %d frame\n", num);
                 for (i = 0; i < num; i++) {
                     if(write_handle != NULL) {
@@ -679,6 +703,17 @@ repeat:
         }
 
         if(write_handle != NULL) {
+            if (skip_frame > 0) {
+                int err;
+                err = snd_pcm_writei(write_handle, silence_data, READ_FRAME);
+                if(err != READ_FRAME)
+                    eq_err("====[EQ] write frame error = %d, not %d\n", err, READ_FRAME);
+
+                eq_err("skip_frame = %d\n", skip_frame);
+                skip_frame--;
+                continue;
+            }
+
             //usleep(30*1000);
             err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
             if(err != READ_FRAME)
