@@ -25,7 +25,7 @@
 #define WRITE_DEVICE_NAME "fake_play"
 #define JACK_DEVICE_NAME "fake_jack"
 #define JACK2_DEVICE_NAME "fake_jack2"
-#define READ_FRAME  2048    //(768)
+#define READ_FRAME  1920    //(768)
 #define PERIOD_SIZE (READ_FRAME)  //(SAMPLE_RATE/8)
 #define PERIOD_counts (8) //double of delay 3*21.3=64ms
 #define BUFFER_SIZE (PERIOD_SIZE * PERIOD_counts) // keep a large buffer_size
@@ -564,6 +564,7 @@ int main()
     bool low_power_mode = low_power_mode_check();
     char *silence_data = (char *)calloc(READ_FRAME * 2 * 2, 1);//2ch 16bit
     int socket_fd = -1;
+    clock_t startProcTime, endProcTime;
 
     // wake_lock = RK_wake_lock_new("eq_drc_process");
 
@@ -601,9 +602,12 @@ repeat:
     // RK_acquire_wake_lock(wake_lock);
 
     while (1) {
+        // startProcTime = clock();
         err = snd_pcm_readi(capture_handle, buffer , READ_FRAME);
+        // endProcTime = clock();
+        // printf("snd_pcm_readi cost_time: %ld us\n", endProcTime - startProcTime);
         if (err != READ_FRAME)
-            eq_err("====[EQ] read frame error = %d===\n",err);
+            eq_err("====[EQ] read frame error = %d, not %d\n", err, READ_FRAME);
 
         if (err < 0) {
             if (err == -EPIPE)
@@ -613,7 +617,7 @@ repeat:
             // Still an error, need to exit.
             if (err < 0) {
                 eq_err("[EQ] Error occured while recording: %s\n", snd_strerror(err));
-                usleep(200 * 1000);
+                // usleep(200 * 1000);
                 if (capture_handle)
                     snd_pcm_close(capture_handle);
                 if (write_handle)
@@ -716,8 +720,18 @@ repeat:
 
             //usleep(30*1000);
             err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
-            if(err != READ_FRAME)
+            if(err != READ_FRAME) {
                 eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, READ_FRAME);
+
+                if (err > 0) {
+                    snd_pcm_sframes_t frames = READ_FRAME - err;
+                    startProcTime = clock();
+                    frames = snd_pcm_forward(write_handle, frames);
+                    endProcTime = clock();
+                    printf("snd_pcm_forward cost_time: %ld us\n", endProcTime - startProcTime);
+                    eq_err("[EQ] snd_pcm_forward frames: %d\n", frames);
+                }
+            }
 
             if (err < 0) {
                 if (err == -EPIPE)
@@ -726,7 +740,7 @@ repeat:
                 err = snd_pcm_recover(write_handle, err, 0);
                 if (err < 0) {
                     eq_err( "[EQ] Error occured while writing: %s\n", snd_strerror(err));
-                    usleep(200 * 1000);
+                    // usleep(200 * 1000);
 
                     if (write_handle) {
                         snd_pcm_close(write_handle);
