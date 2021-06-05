@@ -692,11 +692,11 @@ repeat:
                     if(write_handle != NULL) {
                         err = snd_pcm_writei(write_handle, silence_data, READ_FRAME);
                         if(err != READ_FRAME)
-                            eq_err("====[EQ] write frame error = %d, not %d\n", err, READ_FRAME);
+                            eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, READ_FRAME);
                     } else if (socket_fd >= 0) {
                         err = RK_socket_send(socket_fd, silence_data, READ_FRAME * 4); //2ch 16bit
                         if(err != (READ_FRAME * 4))
-                            eq_err("====[EQ] write frame error = %d, not %d\n", err, READ_FRAME * 4);
+                            eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, READ_FRAME * 4);
                     }
                 }
             }
@@ -707,7 +707,7 @@ repeat:
                 int err;
                 err = snd_pcm_writei(write_handle, silence_data, READ_FRAME);
                 if(err != READ_FRAME)
-                    eq_err("====[EQ] write frame error = %d, not %d\n", err, READ_FRAME);
+                    eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, READ_FRAME);
 
                 eq_err("skip_frame = %d\n", skip_frame);
                 skip_frame--;
@@ -717,7 +717,7 @@ repeat:
             //usleep(30*1000);
             err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
             if(err != READ_FRAME)
-                eq_err("====[EQ] write frame error = %d===\n",err);
+                eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, READ_FRAME);
 
             if (err < 0) {
                 if (err == -EPIPE)
@@ -741,7 +741,7 @@ repeat:
             if (g_bt_is_connect == BT_CONNECT_BSA) {
                 err = RK_socket_send(socket_fd, (char *)buffer, READ_FRAME * 4);
                 if (err != READ_FRAME * 4 && -EAGAIN != err)
-                    eq_err("====[EQ] write frame error = %d===\n", err);
+                    eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, READ_FRAME * 4);
 
                 if (err < 0 && -EAGAIN != err) {
                     if (socket_fd >= 0) {
