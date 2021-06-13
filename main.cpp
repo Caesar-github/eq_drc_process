@@ -590,7 +590,7 @@ repeat:
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
 
-    eq_debug("\n==========EQ/DRC process release version 1.23===============\n");
+    eq_debug("\n==========EQ/DRC process release version 1.24===============\n");
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
@@ -632,6 +632,12 @@ repeat:
             mute_frame ++;
         else
             mute_frame = 0;
+
+        if ((g_bt_is_connect == BT_DISCONNECT) && (socket_fd >= 0)) {
+                eq_debug("[EQ] bsa bt source disconnect, teardown client socket\n");
+                RK_socket_client_teardown(socket_fd);
+                socket_fd = -1;
+        }
 
         if(mute_frame >= mute_frame_thd) {
             //usleep(30*1000);
