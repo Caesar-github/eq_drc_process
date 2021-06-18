@@ -6,6 +6,7 @@
 #include <alsa/asoundlib.h>
 #include <signal.h>
 #include <sys/epoll.h>
+#include <sys/inotify.h>
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -53,16 +54,240 @@ enum BT_CONNECT_STATE{
     BT_CONNECT_BSA
 };
 
+#define POWER_STATE_PATH        "/sys/power/state"
+
+struct power_state_inotify {
+    int fd;
+    int watch_status;
+    bool stop;
+};
+
+enum {
+    POWER_STATE_RESUME = 0,
+    POWER_STATE_SUSPENDING,
+    POWER_STATE_SUSPEND,
+};
+
+static struct power_state_inotify g_psi;
+
 static char g_bt_mac_addr[17];
 static enum BT_CONNECT_STATE g_bt_is_connect = BT_DISCONNECT;
 static bool g_system_sleep = false;
 static char sock_path[] = "/data/bsa/config/bsa_socket";
+static int power_state = POWER_STATE_RESUME;
 
 struct timeval tv_begin, tv_end;
 //gettimeofday(&tv_begin, NULL);
 
 extern int set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t buffer_size,
                          snd_pcm_uframes_t period_size, char **msg);
+
+/* epoll for inotify */
+#define EPOLL_SIZE                      512
+#define ARRAY_LENGTH                    128
+#define NAME_LENGTH                     128
+
+#define EPOLL_MAX_EVENTS                32
+
+struct file_name_fd_desc {
+    int fd;
+    char name[32];
+    char base_name[NAME_LENGTH];
+};
+
+static struct epoll_event g_PendingEventItems[EPOLL_MAX_EVENTS];
+
+static struct file_name_fd_desc g_file_name_fd_desc[ARRAY_LENGTH];
+static int array_index = 0;
+
+static char *base_dir = "/sys/power";
+
+static int add_to_epoll(int epoll_fd, int fd)
+{
+    int result;
+    struct epoll_event eventItem;
+
+    memset(&eventItem, 0, sizeof(eventItem));
+    eventItem.events    = EPOLLIN;
+    eventItem.data.fd   = fd;
+    result = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &eventItem);
+
+    return result;
+}
+
+static void remove_from_epoll(int epoll_fd, int fd)
+{
+    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+}
+
+static int get_name_from_fd(int fd, char **name)
+{
+    int i;
+
+    for(i = 0; i < ARRAY_LENGTH; i++)
+    {
+        if(fd == g_file_name_fd_desc[i].fd)
+        {
+            *name = g_file_name_fd_desc[i].name;
+            return 0;
+        }
+    }
+
+    return -1;
+}
+
+static int inotify_ctl_info(int inotify_fd, int epoll_fd)
+{
+    char event_buf[EPOLL_SIZE];
+    int event_pos = 0;
+    int event_size;
+    struct inotify_event *event;
+    int result;
+    int tmp_fd;
+    int i;
+
+    memset(event_buf, 0, EPOLL_SIZE);
+    result = read(inotify_fd, event_buf, sizeof(event_buf));
+    if(result < (int)sizeof(*event)) {
+        printf("could not get event!\n");
+        return -1;
+    }
+
+    while (result >= (int)sizeof(*event))
+    {
+        event = (struct inotify_event *)(event_buf + event_pos);
+        if (event->len)
+        {
+            if (event->mask & IN_CREATE)
+            {
+                sprintf(g_file_name_fd_desc[array_index].name, "%s", event->name);
+                sprintf(g_file_name_fd_desc[array_index].base_name, "%s/%s", base_dir, event->name);
+
+                tmp_fd = open(g_file_name_fd_desc[array_index].base_name, O_RDWR);
+                if(-1 == tmp_fd)
+                {
+                    printf("inotify_ctl_info open error!\n");
+                    return -1;
+                }
+                add_to_epoll(epoll_fd, tmp_fd);
+
+                g_file_name_fd_desc[array_index].fd = tmp_fd;
+                if(ARRAY_LENGTH == array_index)
+                {
+                    array_index = 0;
+                }
+                array_index += 1;
+
+                printf("add file to epoll: %s\n", event->name);
+            }
+            else if (event->mask & IN_DELETE)
+            {
+                for(i = 0; i < ARRAY_LENGTH; i++)
+                {
+                    if(!strcmp(g_file_name_fd_desc[i].name, event->name))
+                    {
+                        remove_from_epoll(epoll_fd, g_file_name_fd_desc[i].fd);
+
+                        g_file_name_fd_desc[i].fd = 0;
+                        memset(g_file_name_fd_desc[i].name, 0, sizeof(g_file_name_fd_desc[i].name));
+                        memset(g_file_name_fd_desc[i].base_name, 0, sizeof(g_file_name_fd_desc[i].base_name));
+
+                        printf("remove file from epoll: %s\n", event->name);
+                        break;
+                    }
+                }
+            }
+            else if (event->mask & IN_MODIFY)
+            {
+                printf("modify file to epoll: %s and will suspend, power_state: %d\n",
+                    event->name, power_state);
+
+                if (power_state == POWER_STATE_RESUME)
+                    power_state = POWER_STATE_SUSPENDING;
+                else
+                    power_state = POWER_STATE_RESUME;
+            }
+        }
+
+        event_size = sizeof(*event) + event->len;
+        result -= event_size;
+        event_pos += event_size;
+    }
+
+    return 0;
+}
+
+static void *power_status_listen(void *arg)
+{
+    int inotify_fd;
+    int epoll_fd;
+    int result;
+    int i;
+
+    char readbuf[EPOLL_SIZE];
+    int readlen;
+
+    char *tmp_name;
+
+    eq_info("[EQ] %s enter\n", __func__);
+
+    epoll_fd = epoll_create(1);
+    if(-1 == epoll_fd)
+    {
+        printf("epoll_create error!\n");
+        goto err;
+    }
+
+    inotify_fd = inotify_init();
+
+    result = inotify_add_watch(inotify_fd, base_dir, IN_MODIFY);
+    if(-1 == result)
+    {
+        printf("inotify_add_watch error!\n");
+        goto err;
+    }
+
+    add_to_epoll(epoll_fd, inotify_fd);
+
+    eq_info("[EQ] %s, %d add_to_epoll\n", __func__, __LINE__);
+
+    while (1)
+    {
+        result = epoll_wait(epoll_fd, g_PendingEventItems, EPOLL_MAX_EVENTS, -1);
+        if (-1 == result)
+        {
+            printf("epoll wait error!\n");
+            goto err;
+        }
+        else
+        {
+            for (i = 0; i < result; i++)
+            {
+                if (g_PendingEventItems[i].data.fd == inotify_fd)
+                {
+                    if (-1 == inotify_ctl_info(inotify_fd, epoll_fd))
+                    {
+                        printf("inotify_ctl_info error!\n");
+                        goto err;
+                    }
+                }
+                else
+                {
+                    if (!get_name_from_fd(g_PendingEventItems[i].data.fd, &tmp_name))
+                    {
+                        readlen = read(g_PendingEventItems[i].data.fd, readbuf, EPOLL_SIZE);
+                        readbuf[readlen] = '\0';
+                        printf("read data from %s : %s\n", tmp_name, readbuf);
+                    }
+                }
+            }
+        }
+    }
+
+err:
+    eq_info("[EQ] %s exit\n", __func__);
+    return NULL;
+}
 
 void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32_t rate)
 {
@@ -560,6 +785,7 @@ int main()
     /* LINE_OUT is the default output device */
     int device_flag, new_flag;
     pthread_t a2dp_status_listen_thread;
+    pthread_t power_status_listen_thread;
     // struct rk_wake_lock* wake_lock;
     bool low_power_mode = low_power_mode_check();
     char *silence_data = (char *)calloc(READ_FRAME * 2 * 2, 1);//2ch 16bit
@@ -574,6 +800,7 @@ int main()
     }
 
     /* Create a thread to listen for Bluetooth connection status. */
+    pthread_create(&power_status_listen_thread, NULL, power_status_listen, NULL);
     pthread_create(&a2dp_status_listen_thread, NULL, a2dp_status_listen, NULL);
 
 repeat:
@@ -590,7 +817,7 @@ repeat:
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
 
-    eq_debug("\n==========EQ/DRC process release version 1.24===============\n");
+    eq_debug("\n==========EQ/DRC process release version 1.24 062200===============\n");
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
@@ -626,7 +853,7 @@ repeat:
             }
         }
 
-        if (g_system_sleep)
+        if (g_system_sleep || power_state == POWER_STATE_SUSPENDING)
             mute_frame = mute_frame_thd;
         else if(low_power_mode && is_mute_frame(buffer, channels * READ_FRAME))
             mute_frame ++;
@@ -640,6 +867,7 @@ repeat:
         }
 
         if(mute_frame >= mute_frame_thd) {
+             // eq_info("[EQ] g_system_sleep=%d, power_state=%d\n", g_system_sleep, power_state);
             //usleep(30*1000);
             /* Reassign to avoid overflow */
             memset(buffer, 0, sizeof(buffer));
@@ -661,8 +889,13 @@ repeat:
 
                 snd_pcm_close(write_handle);
                 // RK_release_wake_lock(wake_lock);
-                eq_err("[EQ] %d second no playback,close write handle for you dd!!!\n ", MUTE_TIME_THRESHOD);
                 write_handle = NULL;
+                if (power_state == POWER_STATE_SUSPENDING) {
+                    eq_err("[EQ] suspend and close write handle for you right now!\n");
+                    power_state = POWER_STATE_SUSPEND;
+                } else {
+                    eq_err("[EQ] %d second no playback, close write handle for you now!\n ", MUTE_TIME_THRESHOD);
+                }
             }
             continue;
         }
@@ -784,6 +1017,9 @@ repeat:
 
 error:
     eq_debug("=== [EQ] Exit eq ===\n");
+
+    g_psi.stop = 1;
+
     if (capture_handle)
         snd_pcm_close(capture_handle);
 
