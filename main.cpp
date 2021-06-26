@@ -55,11 +55,18 @@ enum BT_CONNECT_STATE{
 };
 
 #define POWER_STATE_PATH        "/sys/power/state"
+#define USER_PLAY_STATUS        "/dev/snd/pcmC7D0p"
 
-struct power_state_inotify {
+struct user_play_inotify {
     int fd;
-    int watch_status;
+    int watch_desc;
     bool stop;
+};
+
+enum {
+    USER_PLAY_CLOSED = 0,
+    USER_PLAY_CLOSING,
+    USER_PLAY_OPENED,
 };
 
 enum {
@@ -68,13 +75,14 @@ enum {
     POWER_STATE_SUSPEND,
 };
 
-static struct power_state_inotify g_psi;
-
+static struct user_play_inotify g_upi;
 static char g_bt_mac_addr[17];
 static enum BT_CONNECT_STATE g_bt_is_connect = BT_DISCONNECT;
 static bool g_system_sleep = false;
 static char sock_path[] = "/data/bsa/config/bsa_socket";
+
 static int power_state = POWER_STATE_RESUME;
+static int user_play_state = USER_PLAY_CLOSED;
 
 struct timeval tv_begin, tv_end;
 //gettimeofday(&tv_begin, NULL);
@@ -668,6 +676,85 @@ const char *get_device_name(int device_flag)
     return device_name;
 }
 
+static void inotify_event_handler(struct inotify_event *event)
+{
+    // eq_info("[EQ] %s enter\n", __func__);
+    // eq_info("[EQ] event->mask: 0x%08x\n", event->mask);
+    // eq_info("[EQ] event->name: %s\n", event->name);
+
+    switch (event->mask)
+    {
+        case IN_OPEN:
+            user_play_state = USER_PLAY_OPENED;
+            eq_info("[EQ] %s USER_PLAY_OPENED\n", __func__);
+            break;
+        case IN_CLOSE_WRITE:
+            user_play_state = USER_PLAY_CLOSING;
+            eq_info("[EQ] %s USER_PLAY_CLOSING\n", __func__);
+            break;
+        default:
+            break;
+    }
+}
+
+static void *user_play_status_listen(void *arg)
+{
+    struct user_play_inotify *upi = &g_upi;
+    struct inotify_event *event = NULL;
+    FILE *fp;
+    char *buf;
+
+    eq_info("[EQ] %s enter\n", __func__);
+
+    buf = (char *)calloc(1024, 1);
+    if (!buf) {
+        eq_err("[EQ] %s alloc buf failed!\n", __func__);
+        return NULL;
+    }
+
+    upi->stop = 0;
+    upi->fd = inotify_init();
+
+    upi->watch_desc = inotify_add_watch(upi->fd, USER_PLAY_STATUS, IN_ALL_EVENTS);
+    while (!upi->stop)
+    {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(upi->fd, &fds);
+
+        if (select(upi->fd + 1, &fds, NULL, NULL, NULL) > 0)
+        {
+            int len, index = 0;
+            while (((len = read(upi->fd, buf, 1024)) < 0) && (errno == EINTR));
+            while (index < len)
+            {
+                event = (struct inotify_event *)(buf + index);
+                inotify_event_handler(event);
+                index += sizeof(struct inotify_event) + event->len;
+            }
+        }
+    }
+
+    if (upi->fd >= 0) {
+        inotify_rm_watch(upi->fd, upi->watch_desc);
+        close(upi->fd);
+        upi->fd = -1;
+    }
+
+    if (buf)
+        free(buf);
+
+    eq_info("[EQ] %s exit\n", __func__);
+
+    return NULL;
+
+err_out:
+    if (buf)
+        free(buf);
+
+    return NULL;
+}
+
 void *a2dp_status_listen(void *arg)
 {
     int ret = 0;
@@ -785,6 +872,7 @@ int main()
     /* LINE_OUT is the default output device */
     int device_flag, new_flag;
     pthread_t a2dp_status_listen_thread;
+    pthread_t user_play_status_listen_thread;
     pthread_t power_status_listen_thread;
     // struct rk_wake_lock* wake_lock;
     bool low_power_mode = low_power_mode_check();
@@ -801,6 +889,7 @@ int main()
 
     /* Create a thread to listen for Bluetooth connection status. */
     pthread_create(&power_status_listen_thread, NULL, power_status_listen, NULL);
+    pthread_create(&user_play_status_listen_thread, NULL, user_play_status_listen, NULL);
     pthread_create(&a2dp_status_listen_thread, NULL, a2dp_status_listen, NULL);
 
 repeat:
@@ -808,7 +897,7 @@ repeat:
     write_handle = NULL;
     err = 0;
     memset(buffer, 0, sizeof(buffer));
-    memset((char *)silence_data, 0xff, sizeof(silence_data));
+    memset((char *)silence_data, 0, sizeof(silence_data));
     sampleRate = SAMPLE_RATE;
     channels = CHANNEL;
     mute_frame_thd = (int)MUTE_FRAME_THRESHOD;
@@ -817,7 +906,7 @@ repeat:
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
 
-    eq_debug("\n==========EQ/DRC process release version 1.24 062200===============\n");
+    eq_debug("\n==========EQ/DRC process release version 1.26===============\n");
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
@@ -866,6 +955,13 @@ repeat:
                 socket_fd = -1;
         }
 
+        // eq_info("[EQ] user_play_state=%d\n", user_play_state);
+
+        if (user_play_state == USER_PLAY_CLOSING) {
+            // eq_info("[EQ] USER_PLAY_CLOSING and clean buffer to mute\n");
+            memset(buffer, 0, sizeof(buffer));
+        }
+
         if(mute_frame >= mute_frame_thd) {
              // eq_info("[EQ] g_system_sleep=%d, power_state=%d\n", g_system_sleep, power_state);
             //usleep(30*1000);
@@ -896,6 +992,8 @@ repeat:
                 } else {
                     eq_err("[EQ] %d second no playback, close write handle for you now!\n ", MUTE_TIME_THRESHOD);
                 }
+
+                user_play_state = USER_PLAY_CLOSED;
             }
             continue;
         }
@@ -1018,7 +1116,7 @@ repeat:
 error:
     eq_debug("=== [EQ] Exit eq ===\n");
 
-    g_psi.stop = 1;
+    g_upi.stop = 1;
 
     if (capture_handle)
         snd_pcm_close(capture_handle);
