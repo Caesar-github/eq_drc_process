@@ -4,6 +4,7 @@
 #include <vector>
 #include <errno.h>
 #include <alsa/asoundlib.h>
+#include <math.h>
 #include <signal.h>
 #include <sys/epoll.h>
 #include <sys/inotify.h>
@@ -109,6 +110,132 @@ static struct file_name_fd_desc g_file_name_fd_desc[ARRAY_LENGTH];
 static int array_index = 0;
 
 static char *base_dir = "/sys/power";
+
+/* hanlding fade-in or fade-out */
+#define FADE_IN             0
+#define FADE_OUT            1
+
+#ifndef av_clipd
+#   define av_clipd         av_clipd_c
+#endif
+
+enum CurveType { NONE = -1, TRI, QSIN, ESIN, HSIN, LOG, IPAR, QUA, CUB, SQU, CBR, PAR, EXP, IQSIN, IHSIN, DESE, DESI, LOSI, SINC, ISINC, NB_CURVES };
+
+/**
+ * Clip a double value into the amin-amax range.
+ * @param a value to clip
+ * @param amin minimum value of the clip range
+ * @param amax maximum value of the clip range
+ * @return clipped value
+ */
+static inline const double av_clipd_c(double a, double amin, double amax)
+{
+    // eq_info("[EQ] %s - %d enter\n", __func__, __LINE__);
+    if      (a < amin) return amin;
+    else if (a > amax) return amax;
+    else               return a;
+}
+
+static double fade_gain(int curve, int64_t index, int64_t range)
+{
+#define CUBE(a) ((a)*(a)*(a))
+    double gain;
+
+    gain = av_clipd(1.0 * index / range, 0, 1.0);
+
+    // eq_info("[EQ] %s - %d index=%ld gain=%lf\n", __func__, __LINE__, index, gain);
+
+    switch (curve) {
+    case QSIN:
+        gain = sin(gain * M_PI / 2.0);
+        break;
+    case IQSIN:
+        /* 0.6... = 2 / M_PI */
+        gain = 0.6366197723675814 * asin(gain);
+        break;
+    case ESIN:
+        gain = 1.0 - cos(M_PI / 4.0 * (CUBE(2.0*gain - 1) + 1));
+        break;
+    case HSIN:
+        gain = (1.0 - cos(gain * M_PI)) / 2.0;
+        break;
+    case IHSIN:
+        /* 0.3... = 1 / M_PI */
+        gain = 0.3183098861837907 * acos(1 - 2 * gain);
+        break;
+    case EXP:
+        /* -11.5... = 5*ln(0.1) */
+        gain = exp(-11.512925464970227 * (1 - gain));
+        break;
+    case LOG:
+        gain = av_clipd(1 + 0.2 * log10(gain), 0, 1.0);
+        break;
+    case PAR:
+        gain = 1 - sqrt(1 - gain);
+        break;
+    case IPAR:
+        gain = (1 - (1 - gain) * (1 - gain));
+        break;
+    case QUA:
+        gain *= gain;
+        break;
+    case CUB:
+        gain = CUBE(gain);
+        break;
+    case SQU:
+        gain = sqrt(gain);
+        break;
+    case CBR:
+        gain = cbrt(gain);
+        break;
+    case DESE:
+        gain = gain <= 0.5 ? cbrt(2 * gain) / 2: 1 - cbrt(2 * (1 - gain)) / 2;
+        break;
+    case DESI:
+        gain = gain <= 0.5 ? CUBE(2 * gain) / 2: 1 - CUBE(2 * (1 - gain)) / 2;
+        break;
+    case LOSI: {
+                   const double a = 1. / (1. - 0.787) - 1;
+                   double A = 1. / (1.0 + exp(0 -((gain-0.5) * a * 2.0)));
+                   double B = 1. / (1.0 + exp(a));
+                   double C = 1. / (1.0 + exp(0-a));
+                   gain = (A - B) / (C - B);
+               }
+        break;
+    case SINC:
+        gain = gain >= 1.0 ? 1.0 : sin(M_PI * (1.0 - gain)) / (M_PI * (1.0 - gain));
+        break;
+    case ISINC:
+        gain = gain <= 0.0 ? 0.0 : 1.0 - sin(M_PI * gain) / (M_PI * gain);
+        break;
+    case NONE:
+        gain = 1.0;
+        break;
+    }
+
+    return gain;
+}
+
+#define FADE(name, type)                                                    \
+static void fade_samples_## name (uint8_t **dst, uint8_t * const *src,      \
+                                  int nb_samples, int channels, int dir,    \
+                                  int64_t start, int64_t range, int curve)  \
+{                                                                           \
+    type *d = (type *)dst[0];                                               \
+    const type *s = (type *)src[0];                                         \
+    int i, c, k = 0;                                                        \
+                                                                            \
+    for (i = 0; i < nb_samples; i++) {                                      \
+        double gain = fade_gain(curve, start + i * dir, range);             \
+        for (c = 0; c < channels; c++, k++)                                 \
+            d[k] = s[k] * gain;                                             \
+    }                                                                       \
+}
+
+FADE(dbl, double)
+FADE(flt, float)
+FADE(s16, int16_t)
+FADE(s32, int32_t)
 
 static int add_to_epoll(int epoll_fd, int fd)
 {
@@ -715,7 +842,7 @@ static void *user_play_status_listen(void *arg)
     upi->stop = 0;
     upi->fd = inotify_init();
 
-    upi->watch_desc = inotify_add_watch(upi->fd, USER_PLAY_STATUS, IN_ALL_EVENTS);
+    upi->watch_desc = inotify_add_watch(upi->fd, USER_PLAY_STATUS, IN_OPEN | IN_CLOSE_WRITE);
     while (!upi->stop)
     {
         fd_set fds;
@@ -866,7 +993,7 @@ int main()
 {
     int err;
     snd_pcm_t *capture_handle, *write_handle;
-    short buffer[READ_FRAME * PERIOD_counts];
+    short buffer[READ_FRAME * PERIOD_counts * CHANNEL];
     unsigned int sampleRate, channels;
     int mute_frame_thd, mute_frame, skip_frame = 0;
     /* LINE_OUT is the default output device */
@@ -957,31 +1084,47 @@ repeat:
 
         // eq_info("[EQ] user_play_state=%d\n", user_play_state);
 
-        if (user_play_state == USER_PLAY_CLOSING) {
-            // eq_info("[EQ] USER_PLAY_CLOSING and clean buffer to mute\n");
-            memset(buffer, 0, sizeof(buffer));
-        }
-
         if(mute_frame >= mute_frame_thd) {
              // eq_info("[EQ] g_system_sleep=%d, power_state=%d\n", g_system_sleep, power_state);
             //usleep(30*1000);
             /* Reassign to avoid overflow */
-            memset(buffer, 0, sizeof(buffer));
+            // memset(buffer, 0, sizeof(buffer));
+
             mute_frame = mute_frame_thd;
             if (write_handle) {
-                // memset(buffer, 0, sizeof(buffer));
-                // err = snd_pcm_writei(write_handle, buffer, BUFFER_SIZE);
-                // if(err != BUFFER_SIZE)
-                //             eq_err("====[EQ] write frame error = %d, not %d\n", err, BUFFER_SIZE);
+                int64_t start = 0;
+                int fade_type = FADE_OUT;
+                int nb_samples = READ_FRAME * PERIOD_counts;
+                int buf_bytes = READ_FRAME * channels * sizeof(short) * PERIOD_counts;
+                short *fade_buf, *src_buf;
+                int curve_type = IQSIN;
 
-                // int i, num = 8;
-                // for (i = 0; i < num; i++) {
-                //     if(write_handle != NULL) {
-                //         err = snd_pcm_writei(write_handle, silence_data, READ_FRAME);
-                //         if(err != READ_FRAME)
-                //             eq_err("====[EQ] write frame error = %d, not %d\n", err, READ_FRAME);
-                //     }
-                // }
+                fade_buf = (short *)calloc(buf_bytes, 1);
+                if (!fade_buf) {
+                    eq_err("[EQ] alloc fade_buf failed\n");
+                    return -1;
+                }
+
+                src_buf = (short *)calloc(buf_bytes, 1);
+                if (!src_buf) {
+                    eq_err("[EQ] alloc src_buf failed\n");
+                    return -1;
+                }
+
+                memcpy((void *)(src_buf), (void *)(buffer), buf_bytes);
+
+                eq_info("[EQ] USER_PLAY_CLOSED and fade out\n");
+
+                fade_samples_s16((uint8_t **)(&fade_buf), (uint8_t **)(&src_buf),
+                            nb_samples, channels,
+                            fade_type ? -1 : 1, start,
+                            nb_samples, curve_type);
+                memcpy((void *)(buffer), (void *)(fade_buf), buf_bytes);
+
+                if (src_buf)
+                    free(src_buf);
+                if (fade_buf)
+                    free(fade_buf);
 
                 snd_pcm_close(write_handle);
                 // RK_release_wake_lock(wake_lock);
