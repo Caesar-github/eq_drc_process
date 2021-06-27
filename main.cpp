@@ -364,6 +364,8 @@ static void *power_status_listen(void *arg)
 
     char *tmp_name;
 
+    return NULL;
+
     eq_info("[EQ] %s enter\n", __func__);
 
     epoll_fd = epoll_create(1);
@@ -1000,7 +1002,7 @@ int main()
     int device_flag, new_flag;
     pthread_t a2dp_status_listen_thread;
     pthread_t user_play_status_listen_thread;
-    pthread_t power_status_listen_thread;
+    // pthread_t power_status_listen_thread;
     // struct rk_wake_lock* wake_lock;
     bool low_power_mode = low_power_mode_check();
     char *silence_data = (char *)calloc(READ_FRAME * 2 * 2, 1);//2ch 16bit
@@ -1015,7 +1017,7 @@ int main()
     }
 
     /* Create a thread to listen for Bluetooth connection status. */
-    pthread_create(&power_status_listen_thread, NULL, power_status_listen, NULL);
+    // pthread_create(&power_status_listen_thread, NULL, power_status_listen, NULL);
     pthread_create(&user_play_status_listen_thread, NULL, user_play_status_listen, NULL);
     pthread_create(&a2dp_status_listen_thread, NULL, a2dp_status_listen, NULL);
 
@@ -1033,7 +1035,7 @@ repeat:
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
 
-    eq_debug("\n==========EQ/DRC process release version 1.26===============\n");
+    eq_debug("\n==========EQ/DRC process release version 1.26 20210627_00===============\n");
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
@@ -1069,7 +1071,7 @@ repeat:
             }
         }
 
-        if (g_system_sleep || power_state == POWER_STATE_SUSPENDING)
+        if (g_system_sleep)
             mute_frame = mute_frame_thd;
         else if(low_power_mode && is_mute_frame(buffer, channels * READ_FRAME))
             mute_frame ++;
