@@ -815,11 +815,13 @@ static void inotify_event_handler(struct inotify_event *event)
     {
         case IN_OPEN:
             user_play_state = USER_PLAY_OPENED;
-            eq_info("[EQ] %s USER_PLAY_OPENED\n", __func__);
+            system("amixer sset 'Playback Path' DAC_DIG_ON");
+            eq_info("[EQ] %s USER_PLAY_OPENED and DAC_DIG_ON\n", __func__);
             break;
         case IN_CLOSE_WRITE:
             user_play_state = USER_PLAY_CLOSING;
-            eq_info("[EQ] %s USER_PLAY_CLOSING\n", __func__);
+            system("amixer sset 'Playback Path' DAC_DIG_OFF");
+            eq_info("[EQ] %s USER_PLAY_CLOSING and DAC_DIG_OFF\n", __func__);
             break;
         default:
             break;
@@ -1094,6 +1096,7 @@ repeat:
 
             mute_frame = mute_frame_thd;
             if (write_handle) {
+#if 1 // fade-out
                 int64_t start = 0;
                 int fade_type = FADE_OUT;
                 int nb_samples = READ_FRAME * PERIOD_counts;
@@ -1127,6 +1130,7 @@ repeat:
                     free(src_buf);
                 if (fade_buf)
                     free(fade_buf);
+#endif
 
                 snd_pcm_close(write_handle);
                 // RK_release_wake_lock(wake_lock);
