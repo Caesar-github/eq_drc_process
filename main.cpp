@@ -57,8 +57,15 @@ enum BT_CONNECT_STATE{
 
 #define POWER_STATE_PATH        "/sys/power/state"
 #define USER_PLAY_STATUS        "/dev/snd/pcmC7D0p"
+#define USER_CAPT_STATUS        "/dev/snd/pcmC0D0c"
 
 struct user_play_inotify {
+    int fd;
+    int watch_desc;
+    bool stop;
+};
+
+struct user_capt_inotify {
     int fd;
     int watch_desc;
     bool stop;
@@ -71,12 +78,20 @@ enum {
 };
 
 enum {
+    USER_CAPT_CLOSED = 0,
+    USER_CAPT_CLOSING,
+    USER_CAPT_OPENED,
+};
+
+enum {
     POWER_STATE_RESUME = 0,
     POWER_STATE_SUSPENDING,
     POWER_STATE_SUSPEND,
 };
 
 static struct user_play_inotify g_upi;
+static struct user_capt_inotify g_uci;
+static bool need_dac_dig = false;
 static char g_bt_mac_addr[17];
 static enum BT_CONNECT_STATE g_bt_is_connect = BT_DISCONNECT;
 static bool g_system_sleep = false;
@@ -84,6 +99,7 @@ static char sock_path[] = "/data/bsa/config/bsa_socket";
 
 static int power_state = POWER_STATE_RESUME;
 static int user_play_state = USER_PLAY_CLOSED;
+static int user_capt_state = USER_CAPT_CLOSED;
 
 struct timeval tv_begin, tv_end;
 //gettimeofday(&tv_begin, NULL);
@@ -805,7 +821,7 @@ const char *get_device_name(int device_flag)
     return device_name;
 }
 
-static void inotify_event_handler(struct inotify_event *event)
+static void user_play_inotify_handler(struct inotify_event *event)
 {
     // eq_info("[EQ] %s enter\n", __func__);
     // eq_info("[EQ] event->mask: 0x%08x\n", event->mask);
@@ -815,13 +831,42 @@ static void inotify_event_handler(struct inotify_event *event)
     {
         case IN_OPEN:
             user_play_state = USER_PLAY_OPENED;
-            system("amixer sset 'Playback Path' DAC_DIG_ON");
-            eq_info("[EQ] %s USER_PLAY_OPENED and DAC_DIG_ON\n", __func__);
+            if (need_dac_dig == true) {
+                system("amixer sset 'Playback Path' DAC_DIG_ON");
+                need_dac_dig = false;
+                eq_info("[EQ] %s USER_PLAY_OPENED and DAC_DIG_ON\n", __func__);
+            } else {
+                eq_info("[EQ] %s USER_PLAY_OPENED\n", __func__);
+            }
             break;
         case IN_CLOSE_WRITE:
             user_play_state = USER_PLAY_CLOSING;
-            system("amixer sset 'Playback Path' DAC_DIG_OFF");
             eq_info("[EQ] %s USER_PLAY_CLOSING and DAC_DIG_OFF\n", __func__);
+            break;
+        default:
+            break;
+    }
+}
+
+static void user_capt_inotify_handler(struct inotify_event *event)
+{
+    // eq_info("[EQ] %s enter\n", __func__);
+    // eq_info("[EQ] event->mask: 0x%08x\n", event->mask);
+    // eq_info("[EQ] event->name: %s\n", event->name);
+
+    switch (event->mask)
+    {
+        case IN_OPEN:
+            user_capt_state = USER_CAPT_OPENED;
+            need_dac_dig = true;
+            system("amixer sset 'Playback Path' DAC_DIG_OFF");
+            system("amixer sset 'Capture MIC Path' 'Main Mic'");
+            eq_info("[EQ] %s USER_CAPT_OPENED and DAC_DIG_OFF\n", __func__);
+            break;
+        case IN_CLOSE_WRITE:
+            user_capt_state = USER_CAPT_CLOSING;
+            system("amixer sset 'Capture MIC Path' 'MIC OFF'");
+            eq_info("[EQ] %s USER_CAPT_CLOSING\n", __func__);
             break;
         default:
             break;
@@ -860,7 +905,7 @@ static void *user_play_status_listen(void *arg)
             while (index < len)
             {
                 event = (struct inotify_event *)(buf + index);
-                inotify_event_handler(event);
+                user_play_inotify_handler(event);
                 index += sizeof(struct inotify_event) + event->len;
             }
         }
@@ -870,6 +915,64 @@ static void *user_play_status_listen(void *arg)
         inotify_rm_watch(upi->fd, upi->watch_desc);
         close(upi->fd);
         upi->fd = -1;
+    }
+
+    if (buf)
+        free(buf);
+
+    eq_info("[EQ] %s exit\n", __func__);
+
+    return NULL;
+
+err_out:
+    if (buf)
+        free(buf);
+
+    return NULL;
+}
+
+static void *user_capt_status_listen(void *arg)
+{
+    struct user_capt_inotify *uci = &g_uci;
+    struct inotify_event *event = NULL;
+    FILE *fp;
+    char *buf;
+
+    eq_info("[EQ] %s enter\n", __func__);
+
+    buf = (char *)calloc(1024, 1);
+    if (!buf) {
+        eq_err("[EQ] %s alloc buf failed!\n", __func__);
+        return NULL;
+    }
+
+    uci->stop = 0;
+    uci->fd = inotify_init();
+
+    uci->watch_desc = inotify_add_watch(uci->fd, USER_CAPT_STATUS, IN_OPEN | IN_CLOSE_WRITE);
+    while (!uci->stop)
+    {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(uci->fd, &fds);
+
+        if (select(uci->fd + 1, &fds, NULL, NULL, NULL) > 0)
+        {
+            int len, index = 0;
+            while (((len = read(uci->fd, buf, 1024)) < 0) && (errno == EINTR));
+            while (index < len)
+            {
+                event = (struct inotify_event *)(buf + index);
+                user_capt_inotify_handler(event);
+                index += sizeof(struct inotify_event) + event->len;
+            }
+        }
+    }
+
+    if (uci->fd >= 0) {
+        inotify_rm_watch(uci->fd, uci->watch_desc);
+        close(uci->fd);
+        uci->fd = -1;
     }
 
     if (buf)
@@ -1004,6 +1107,7 @@ int main()
     int device_flag, new_flag;
     pthread_t a2dp_status_listen_thread;
     pthread_t user_play_status_listen_thread;
+    pthread_t user_capt_status_listen_thread;
     // pthread_t power_status_listen_thread;
     // struct rk_wake_lock* wake_lock;
     bool low_power_mode = low_power_mode_check();
@@ -1021,6 +1125,7 @@ int main()
     /* Create a thread to listen for Bluetooth connection status. */
     // pthread_create(&power_status_listen_thread, NULL, power_status_listen, NULL);
     pthread_create(&user_play_status_listen_thread, NULL, user_play_status_listen, NULL);
+    pthread_create(&user_capt_status_listen_thread, NULL, user_capt_status_listen, NULL);
     pthread_create(&a2dp_status_listen_thread, NULL, a2dp_status_listen, NULL);
 
 repeat:
@@ -1134,6 +1239,7 @@ repeat:
 
                 snd_pcm_close(write_handle);
                 // RK_release_wake_lock(wake_lock);
+                need_dac_dig = true;
                 write_handle = NULL;
                 if (power_state == POWER_STATE_SUSPENDING) {
                     eq_err("[EQ] suspend and close write handle for you right now!\n");
