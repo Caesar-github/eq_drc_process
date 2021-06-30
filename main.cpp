@@ -31,7 +31,7 @@
 #define PERIOD_SIZE (READ_FRAME)  //(SAMPLE_RATE/8)
 #define PERIOD_counts (8) //double of delay 3*21.3=64ms
 #define BUFFER_SIZE (PERIOD_SIZE * PERIOD_counts) // keep a large buffer_size
-#define MUTE_TIME_THRESHOD (5)//seconds
+#define MUTE_TIME_THRESHOD (3)//seconds
 #define MUTE_FRAME_THRESHOD (SAMPLE_RATE * MUTE_TIME_THRESHOD / READ_FRAME)//30 seconds
 //#define ALSA_READ_FORMAT SND_PCM_FORMAT_S32_LE
 #define ALSA_READ_FORMAT SND_PCM_FORMAT_S16_LE
