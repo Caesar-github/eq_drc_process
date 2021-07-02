@@ -1184,7 +1184,7 @@ int main()
     int err;
     snd_pcm_t *capture_handle, *write_handle;
 #if KEEPING_HW_CARD
-    snd_pcm_t *write_handle_bak;
+    snd_pcm_t **write_handle_bak;
 #endif
     short buffer[READ_FRAME * PERIOD_counts * CHANNEL];
     unsigned int sampleRate, channels;
@@ -1228,7 +1228,7 @@ repeat:
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
 
-    eq_debug("\n==========EQ/DRC process release version 1.26 20210702_04===============\n");
+    eq_debug("\n==========EQ/DRC process release version 1.26 20210702_05===============\n");
     eq_debug("==========KEEPING_HW_CARD: %d===============\n", KEEPING_HW_CARD);
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
@@ -1239,7 +1239,12 @@ repeat:
     }
 
 #if KEEPING_HW_CARD
-    write_handle_bak = write_handle;
+    write_handle_bak = (snd_pcm_t **)malloc(sizeof(snd_pcm_t *));
+    if (write_handle_bak == NULL) {
+        eq_err("====[EQ] allocate write_handle_bak failed\n");
+        return -1;
+    }
+    *write_handle_bak = write_handle;
 #endif
 
     // RK_acquire_wake_lock(wake_lock);
@@ -1371,7 +1376,7 @@ repeat:
         while (write_handle == NULL && socket_fd < 0) {
             // RK_acquire_wake_lock(wake_lock);
 #if KEEPING_HW_CARD
-            write_handle = write_handle_bak;
+            write_handle = *write_handle_bak;
             system("amixer sset 'Playback Path' HP");
             eq_info("[EQ] enable HP path and PA\n");
 #else
@@ -1485,6 +1490,13 @@ error:
     eq_debug("=== [EQ] Exit eq ===\n");
 
     g_upi.stop = 1;
+
+#if KEEPING_HW_CARD
+    if (write_handle_bak) {
+        free(write_handle_bak);
+        write_handle_bak = NULL;
+    }
+#endif
 
     if (capture_handle)
         snd_pcm_close(capture_handle);
