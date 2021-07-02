@@ -59,6 +59,8 @@ enum BT_CONNECT_STATE{
 #define USER_PLAY_STATUS        "/dev/snd/pcmC7D0p"
 #define USER_CAPT_STATUS        "/dev/snd/pcmC0D0c"
 
+#define KEEPING_HW_CARD         1
+
 struct user_play_inotify {
     int fd;
     int watch_desc;
@@ -1181,6 +1183,9 @@ int main()
 {
     int err;
     snd_pcm_t *capture_handle, *write_handle;
+#if KEEPING_HW_CARD
+    snd_pcm_t *write_handle_bak;
+#endif
     short buffer[READ_FRAME * PERIOD_counts * CHANNEL];
     unsigned int sampleRate, channels;
     int mute_frame_thd, mute_frame, skip_frame = 0;
@@ -1223,7 +1228,8 @@ repeat:
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
 
-    eq_debug("\n==========EQ/DRC process release version 1.26 20210702_02===============\n");
+    eq_debug("\n==========EQ/DRC process release version 1.26 20210702_04===============\n");
+    eq_debug("==========KEEPING_HW_CARD: %d===============\n", KEEPING_HW_CARD);
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
@@ -1231,6 +1237,10 @@ repeat:
         eq_err("first open playback device failed, exit eq\n");
         return -1;
     }
+
+#if KEEPING_HW_CARD
+    write_handle_bak = write_handle;
+#endif
 
     // RK_acquire_wake_lock(wake_lock);
 
@@ -1318,7 +1328,13 @@ repeat:
                     free(fade_buf);
 #endif
 
+#if KEEPING_HW_CARD
+                system("amixer sset 'Playback Path' OFF");
+                eq_info("[EQ] disable HP path and PA\n");
+#else
                 snd_pcm_close(write_handle);
+#endif
+
                 // RK_release_wake_lock(wake_lock);
                 write_handle = NULL;
                 if (power_state == POWER_STATE_SUSPENDING) {
@@ -1330,6 +1346,14 @@ repeat:
 
                 user_play_state = USER_PLAY_CLOSED;
             }
+
+#if KEEPING_HW_CARD
+            if (write_handle == NULL) {
+                // snd_pcm_forward(write_handle_bak, READ_FRAME);
+                // eq_info("[EQ] forward %d frames\n", READ_FRAME);
+            }
+#endif
+
             continue;
         }
 
@@ -1346,12 +1370,18 @@ repeat:
 
         while (write_handle == NULL && socket_fd < 0) {
             // RK_acquire_wake_lock(wake_lock);
+#if KEEPING_HW_CARD
+            write_handle = write_handle_bak;
+            system("amixer sset 'Playback Path' HP");
+            eq_info("[EQ] enable HP path and PA\n");
+#else
             err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
             if (err < 0 || (write_handle == NULL && socket_fd < 0)) {
                 eq_err("[EQ] Route change failed! Using default audio path.\n");
                 device_flag = DEVICE_FLAG_LINE_OUT;
                 g_bt_is_connect = BT_DISCONNECT;
             }
+#endif
 
             skip_frame = 0;
 
@@ -1407,8 +1437,8 @@ repeat:
 
             if (err < 0) {
                 if (err == -EPIPE)
-                    eq_err("[EQ] 0000 Underrun occurred from write: %d\n", err);
-#if 0
+                    eq_err("[EQ] 0001 Underrun occurred from write: %d\n", err);
+#if 1
                 err = snd_pcm_recover(write_handle, err, 0);
                 if (err < 0) {
                     eq_err( "[EQ] Error occured while writing: %s\n", snd_strerror(err));
