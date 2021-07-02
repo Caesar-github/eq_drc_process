@@ -645,6 +645,15 @@ int alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
     eq_debug(" final period size %ld \n" , write_final_period);
 #endif
 
+    {
+        int monotonic, can_pause;
+
+        monotonic = snd_pcm_hw_params_is_monotonic(write_params);
+        can_pause = snd_pcm_hw_params_can_pause(write_params);
+
+        eq_info("[EQ_INFO] monotonic: %d, can_pause: %d\n", monotonic, can_pause);
+    }
+
     /* Write the parameters to the driver */
     write_err = snd_pcm_hw_params(*write_handle, write_params);
     if (write_err < 0) {
@@ -1085,6 +1094,89 @@ static int signal_handler()
     return 0;
 }
 
+#if 1
+/* I/O error handler */
+static int eq_drc_xrun(snd_pcm_t *handle, snd_pcm_stream_t stream)
+{
+    snd_pcm_status_t *status;
+    snd_output_t *log;
+    int fatal_errors = 0, monotonic = 1, verbose = 1;
+    int res;
+
+    eq_err("[EQ] %s %d enter\n", __func__, __LINE__);
+
+    snd_output_stdio_attach(&log, stderr, 0);
+
+    snd_pcm_status_alloca(&status);
+    if ((res = snd_pcm_status(handle, status))<0) {
+        eq_err("[EQ] status error: %s\n", snd_strerror(res));
+        // prg_exit(EXIT_FAILURE);
+    }
+    if (snd_pcm_status_get_state(status) == SND_PCM_STATE_XRUN) {
+        if (fatal_errors) {
+            eq_err("[EQ] fatal %s: %s\n",
+                    stream == SND_PCM_STREAM_PLAYBACK ? "underrun" : "overrun",
+                    snd_strerror(res));
+            // prg_exit(EXIT_FAILURE);
+        }
+        if (monotonic) {
+#ifdef HAVE_CLOCK_GETTIME
+            struct timespec now, diff, tstamp;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            snd_pcm_status_get_trigger_htstamp(status, &tstamp);
+            timermsub(&now, &tstamp, &diff);
+            fprintf(stderr, "%s!!! (at least %.3f ms long)\n",
+                stream == SND_PCM_STREAM_PLAYBACK ? "underrun" : "overrun",
+                diff.tv_sec * 1000 + diff.tv_nsec / 1000000.0);
+#else
+            fprintf(stderr, "%s !!!\n", "underrun");
+#endif
+        } else {
+            struct timeval now, diff, tstamp;
+            gettimeofday(&now, 0);
+            snd_pcm_status_get_trigger_tstamp(status, &tstamp);
+            timersub(&now, &tstamp, &diff);
+            fprintf(stderr, "%s!!! (at least %.3f ms long)\n",
+                stream == SND_PCM_STREAM_PLAYBACK ? "underrun" : "overrun",
+                diff.tv_sec * 1000 + diff.tv_usec / 1000.0);
+        }
+        if (verbose) {
+            fprintf(stderr, "Status:\n");
+            snd_pcm_status_dump(status, log);
+        }
+        if ((res = snd_pcm_prepare(handle))<0) {
+            eq_err("[EQ] xrun: prepare error: %s\n", snd_strerror(res));
+            // prg_exit(EXIT_FAILURE);
+        }
+        goto out_xrun;     /* ok, data should be accepted again */
+    } if (snd_pcm_status_get_state(status) == SND_PCM_STATE_DRAINING) {
+        if (verbose) {
+            fprintf(stderr, "Status(DRAINING):\n");
+            snd_pcm_status_dump(status, log);
+        }
+        if (stream == SND_PCM_STREAM_CAPTURE) {
+            fprintf(stderr, "capture stream format change? attempting recover...\n");
+            if ((res = snd_pcm_prepare(handle))<0) {
+                eq_err("[EQ] xrun(DRAINING): prepare error: %s\n", snd_strerror(res));
+                // prg_exit(EXIT_FAILURE);
+            }
+            goto out_xrun;
+        }
+    }
+    if (verbose) {
+        fprintf(stderr, "Status(R/W):\n");
+        snd_pcm_status_dump(status, log);
+    }
+    eq_err("[EQ] read/write error, state = %s\n", snd_pcm_state_name(snd_pcm_status_get_state(status)));
+    // prg_exit(EXIT_FAILURE);
+
+out_xrun:
+    snd_output_close(log);
+
+    return 0;
+}
+#endif
+
 int main()
 {
     int err;
@@ -1131,7 +1223,7 @@ repeat:
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
 
-    eq_debug("\n==========EQ/DRC process release version 1.26 20210627_00===============\n");
+    eq_debug("\n==========EQ/DRC process release version 1.26 20210702_02===============\n");
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
@@ -1315,8 +1407,8 @@ repeat:
 
             if (err < 0) {
                 if (err == -EPIPE)
-                    eq_err("[EQ] Underrun occurred from write: %d\n", err);
-
+                    eq_err("[EQ] 0000 Underrun occurred from write: %d\n", err);
+#if 0
                 err = snd_pcm_recover(write_handle, err, 0);
                 if (err < 0) {
                     eq_err( "[EQ] Error occured while writing: %s\n", snd_strerror(err));
@@ -1330,6 +1422,9 @@ repeat:
                     if (device_flag == DEVICE_FLAG_BLUETOOTH)
                         g_bt_is_connect = BT_DISCONNECT;
                 }
+#else
+                eq_drc_xrun(write_handle, SND_PCM_STREAM_PLAYBACK);
+#endif
             }
         }else if (socket_fd >= 0) {
             if (g_bt_is_connect == BT_CONNECT_BSA) {
