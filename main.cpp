@@ -91,7 +91,6 @@ enum {
 
 static struct user_play_inotify g_upi;
 static struct user_capt_inotify g_uci;
-static bool need_dac_dig = false;
 static char g_bt_mac_addr[17];
 static enum BT_CONNECT_STATE g_bt_is_connect = BT_DISCONNECT;
 static bool g_system_sleep = false;
@@ -831,17 +830,11 @@ static void user_play_inotify_handler(struct inotify_event *event)
     {
         case IN_OPEN:
             user_play_state = USER_PLAY_OPENED;
-            if (need_dac_dig == true) {
-                system("amixer sset 'Playback Path' DAC_DIG_ON");
-                need_dac_dig = false;
-                eq_info("[EQ] %s USER_PLAY_OPENED and DAC_DIG_ON\n", __func__);
-            } else {
-                eq_info("[EQ] %s USER_PLAY_OPENED\n", __func__);
-            }
+            eq_info("[EQ] %s USER_PLAY_OPENED\n", __func__);
             break;
         case IN_CLOSE_WRITE:
             user_play_state = USER_PLAY_CLOSING;
-            eq_info("[EQ] %s USER_PLAY_CLOSING and DAC_DIG_OFF\n", __func__);
+            eq_info("[EQ] %s USER_PLAY_CLOSING\n", __func__);
             break;
         default:
             break;
@@ -858,14 +851,10 @@ static void user_capt_inotify_handler(struct inotify_event *event)
     {
         case IN_OPEN:
             user_capt_state = USER_CAPT_OPENED;
-            need_dac_dig = true;
-            system("amixer sset 'Playback Path' DAC_DIG_OFF");
-            system("amixer sset 'Capture MIC Path' 'Main Mic'");
-            eq_info("[EQ] %s USER_CAPT_OPENED and DAC_DIG_OFF\n", __func__);
+            eq_info("[EQ] %s USER_CAPT_OPENED\n", __func__);
             break;
         case IN_CLOSE_WRITE:
             user_capt_state = USER_CAPT_CLOSING;
-            system("amixer sset 'Capture MIC Path' 'MIC OFF'");
             eq_info("[EQ] %s USER_CAPT_CLOSING\n", __func__);
             break;
         default:
@@ -1125,7 +1114,7 @@ int main()
     /* Create a thread to listen for Bluetooth connection status. */
     // pthread_create(&power_status_listen_thread, NULL, power_status_listen, NULL);
     pthread_create(&user_play_status_listen_thread, NULL, user_play_status_listen, NULL);
-    pthread_create(&user_capt_status_listen_thread, NULL, user_capt_status_listen, NULL);
+    // pthread_create(&user_capt_status_listen_thread, NULL, user_capt_status_listen, NULL);
     pthread_create(&a2dp_status_listen_thread, NULL, a2dp_status_listen, NULL);
 
 repeat:
@@ -1239,7 +1228,6 @@ repeat:
 
                 snd_pcm_close(write_handle);
                 // RK_release_wake_lock(wake_lock);
-                need_dac_dig = true;
                 write_handle = NULL;
                 if (power_state == POWER_STATE_SUSPENDING) {
                     eq_err("[EQ] suspend and close write handle for you right now!\n");
