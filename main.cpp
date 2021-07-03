@@ -1184,7 +1184,7 @@ int main()
     int err;
     snd_pcm_t *capture_handle, *write_handle;
 #if KEEPING_HW_CARD
-    snd_pcm_t **write_handle_bak;
+    snd_pcm_t *write_handle_bak;
 #endif
     short buffer[READ_FRAME * PERIOD_counts * CHANNEL];
     unsigned int sampleRate, channels;
@@ -1228,7 +1228,7 @@ repeat:
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
 
-    eq_debug("\n==========EQ/DRC process release version 1.26 20210702_05===============\n");
+    eq_debug("\n==========EQ/DRC process release version 1.26 20210703_00===============\n");
     eq_debug("==========KEEPING_HW_CARD: %d===============\n", KEEPING_HW_CARD);
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
@@ -1239,12 +1239,13 @@ repeat:
     }
 
 #if KEEPING_HW_CARD
-    write_handle_bak = (snd_pcm_t **)malloc(sizeof(snd_pcm_t *));
-    if (write_handle_bak == NULL) {
-        eq_err("====[EQ] allocate write_handle_bak failed\n");
-        return -1;
-    }
-    *write_handle_bak = write_handle;
+    // write_handle_bak = (snd_pcm_t **)malloc(sizeof(snd_pcm_t *));
+    // if (write_handle_bak == NULL) {
+    //     eq_err("====[EQ] allocate write_handle_bak failed\n");
+    //     return -1;
+    // }
+    // *write_handle_bak = write_handle;
+    write_handle_bak = write_handle;
 #endif
 
     // RK_acquire_wake_lock(wake_lock);
@@ -1268,8 +1269,7 @@ repeat:
                 // usleep(200 * 1000);
                 if (capture_handle)
                     snd_pcm_close(capture_handle);
-                if (write_handle)
-                    snd_pcm_close(write_handle);
+
                 goto repeat;
             }
         }
@@ -1353,10 +1353,10 @@ repeat:
             }
 
 #if KEEPING_HW_CARD
-            if (write_handle == NULL) {
+            // if (write_handle == NULL) {
                 // snd_pcm_forward(write_handle_bak, READ_FRAME);
                 // eq_info("[EQ] forward %d frames\n", READ_FRAME);
-            }
+            // }
 #endif
 
             continue;
@@ -1368,7 +1368,7 @@ repeat:
                    get_device_name(device_flag), get_device_name(new_flag));
             device_flag = new_flag;
             if (write_handle) {
-                snd_pcm_close(write_handle);
+                // snd_pcm_close(write_handle);
                 write_handle = NULL;
             }
         }
@@ -1376,9 +1376,20 @@ repeat:
         while (write_handle == NULL && socket_fd < 0) {
             // RK_acquire_wake_lock(wake_lock);
 #if KEEPING_HW_CARD
-            write_handle = *write_handle_bak;
-            system("amixer sset 'Playback Path' HP");
-            eq_info("[EQ] enable HP path and PA\n");
+            if (device_flag == DEVICE_FLAG_ANALOG_HP) {
+                write_handle = write_handle_bak;
+                system("amixer sset 'Playback Path' HP");
+                eq_info("[EQ] enable HP path and PA, write_handle: 0x%x\n", write_handle);
+            } else if (device_flag == DEVICE_FLAG_BLUETOOTH_BSA) {
+                err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
+                if (err < 0 || (write_handle == NULL && socket_fd < 0)) {
+                    eq_err("[EQ] Route change failed! Using default audio path.\n");
+                    device_flag = DEVICE_FLAG_LINE_OUT;
+                    g_bt_is_connect = BT_DISCONNECT;
+                } else {
+                    eq_info("[EQ] enable DEVICE_FLAG_BLUETOOTH_BSA, write_handle: 0x%x\n", write_handle);
+                }
+            }
 #else
             err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
             if (err < 0 || (write_handle == NULL && socket_fd < 0)) {
@@ -1442,7 +1453,7 @@ repeat:
 
             if (err < 0) {
                 if (err == -EPIPE)
-                    eq_err("[EQ] 0001 Underrun occurred from write: %d\n", err);
+                    eq_err("[EQ] Underrun occurred from write: %d\n", err);
 #if 1
                 err = snd_pcm_recover(write_handle, err, 0);
                 if (err < 0) {
@@ -1450,7 +1461,7 @@ repeat:
                     // usleep(200 * 1000);
 
                     if (write_handle) {
-                        snd_pcm_close(write_handle);
+                        // snd_pcm_close(write_handle);
                         write_handle = NULL;
                     }
 
