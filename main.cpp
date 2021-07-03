@@ -98,9 +98,13 @@ static enum BT_CONNECT_STATE g_bt_is_connect = BT_DISCONNECT;
 static bool g_system_sleep = false;
 static char sock_path[] = "/data/bsa/config/bsa_socket";
 
-static int power_state = POWER_STATE_RESUME;
-static int user_play_state = USER_PLAY_CLOSED;
-static int user_capt_state = USER_CAPT_CLOSED;
+#if KEEPING_HW_CARD
+static snd_pcm_t *write_handle_bak = NULL;
+#endif
+
+volatile static int power_state = POWER_STATE_RESUME;
+volatile static int user_play_state = USER_PLAY_CLOSED;
+volatile static int user_capt_state = USER_CAPT_CLOSED;
 
 struct timeval tv_begin, tv_end;
 //gettimeofday(&tv_begin, NULL);
@@ -1183,9 +1187,6 @@ int main()
 {
     int err;
     snd_pcm_t *capture_handle, *write_handle;
-#if KEEPING_HW_CARD
-    snd_pcm_t *write_handle_bak;
-#endif
     short buffer[READ_FRAME * PERIOD_counts * CHANNEL];
     unsigned int sampleRate, channels;
     int mute_frame_thd, mute_frame, skip_frame = 0;
@@ -1193,7 +1194,7 @@ int main()
     int device_flag, new_flag;
     pthread_t a2dp_status_listen_thread;
     pthread_t user_play_status_listen_thread;
-    pthread_t user_capt_status_listen_thread;
+    // pthread_t user_capt_status_listen_thread;
     // pthread_t power_status_listen_thread;
     // struct rk_wake_lock* wake_lock;
     bool low_power_mode = low_power_mode_check();
@@ -1228,13 +1229,22 @@ repeat:
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
 
-    eq_debug("\n==========EQ/DRC process release version 1.26 20210703_00===============\n");
+    eq_debug("\n==========EQ/DRC process release version 1.26 20210703_05===============\n");
     eq_debug("==========KEEPING_HW_CARD: %d===============\n", KEEPING_HW_CARD);
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
+#if KEEPING_HW_CARD
+    if (write_handle_bak != NULL) {
+        snd_pcm_close(write_handle_bak);
+        eq_info("[EQ] resume process and release last write_handle_bak: 0x%x\n", write_handle_bak);
+    } else {
+        eq_info("[EQ] run process first\n");
+    }
+#endif
+
     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
-    if(err < 0) {
-        eq_err("first open playback device failed, exit eq\n");
+    if (err < 0) {
+        eq_err("LINE: %d, first open playback device failed, exit eq\n", __LINE__);
         return -1;
     }
 
@@ -1246,6 +1256,8 @@ repeat:
     // }
     // *write_handle_bak = write_handle;
     write_handle_bak = write_handle;
+    eq_info("[EQ] init write_handle_bak: 0x%x write_handle: 0x%x\n",
+        write_handle_bak, write_handle);
 #endif
 
     // RK_acquire_wake_lock(wake_lock);
@@ -1255,8 +1267,13 @@ repeat:
         err = snd_pcm_readi(capture_handle, buffer , READ_FRAME);
         // endProcTime = clock();
         // printf("snd_pcm_readi cost_time: %ld us\n", endProcTime - startProcTime);
-        if (err != READ_FRAME)
-            eq_err("====[EQ] read frame error = %d, not %d\n", err, READ_FRAME);
+        if (err != READ_FRAME) {
+            if (err == -ESTRPIPE) {
+                eq_err("====[EQ] LINE: %d system suspend and resumed\n", __LINE__);
+            } else {
+                eq_err("====[EQ] LINE: %d read frame error = %d, not %d\n", __LINE__, err, READ_FRAME);
+            }
+        }
 
         if (err < 0) {
             if (err == -EPIPE)
@@ -1364,7 +1381,7 @@ repeat:
 
         new_flag = get_device_flag();
         if (new_flag != device_flag) {
-            eq_debug("\n[EQ] Device route changed, frome\"%s\" to \"%s\"\n\n",
+            eq_debug("\n[EQ] Device route changed, from\"%s\" to \"%s\"\n\n",
                    get_device_name(device_flag), get_device_name(new_flag));
             device_flag = new_flag;
             if (write_handle) {
@@ -1373,13 +1390,18 @@ repeat:
             }
         }
 
+        // eq_info("[EQ] device_flag: %d, %s, write_handle: 0x%x\n",
+        //            device_flag, get_device_name(device_flag), write_handle);
+
         while (write_handle == NULL && socket_fd < 0) {
             // RK_acquire_wake_lock(wake_lock);
 #if KEEPING_HW_CARD
-            if (device_flag == DEVICE_FLAG_ANALOG_HP) {
+            if (device_flag == DEVICE_FLAG_LINE_OUT) {
                 write_handle = write_handle_bak;
                 system("amixer sset 'Playback Path' HP");
                 eq_info("[EQ] enable HP path and PA, write_handle: 0x%x\n", write_handle);
+                // snd_pcm_forward(write_handle, READ_FRAME);
+                // continue;
             } else if (device_flag == DEVICE_FLAG_BLUETOOTH_BSA) {
                 err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
                 if (err < 0 || (write_handle == NULL && socket_fd < 0)) {
@@ -1441,19 +1463,33 @@ repeat:
             if(err != READ_FRAME) {
                 eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, READ_FRAME);
 
-                if (err > 0) {
-                    snd_pcm_sframes_t frames = READ_FRAME - err;
-                    startProcTime = clock();
-                    frames = snd_pcm_forward(write_handle, frames);
-                    endProcTime = clock();
-                    printf("snd_pcm_forward cost_time: %ld us\n", endProcTime - startProcTime);
-                    eq_err("[EQ] snd_pcm_forward frames: %d\n", frames);
-                }
+                // if (err > 0) {
+                //     snd_pcm_sframes_t frames = READ_FRAME - err;
+                //     startProcTime = clock();
+                //     frames = snd_pcm_forward(write_handle, frames);
+                //     endProcTime = clock();
+                //     printf("snd_pcm_forward cost_time: %ld us\n", endProcTime - startProcTime);
+                //     eq_err("[EQ] snd_pcm_forward frames: %d\n", frames);
+                // }
             }
 
             if (err < 0) {
-                if (err == -EPIPE)
+                if (err == -EPIPE) {
                     eq_err("[EQ] Underrun occurred from write: %d\n", err);
+                } else if (err == -EBADFD) {
+                    int err;
+
+                    eq_err("====[EQ] %d, EBADFD and re-open snd\n", __LINE__);
+
+                    snd_pcm_close(write_handle);
+                    err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
+                    if (err < 0) {
+                        eq_err("LINE: %d, open playback device failed, exit eq\n", __LINE__);
+                        return -1;
+                    }
+
+                    write_handle_bak = write_handle;
+                }
 #if 1
                 err = snd_pcm_recover(write_handle, err, 0);
                 if (err < 0) {
@@ -1502,12 +1538,12 @@ error:
 
     g_upi.stop = 1;
 
-#if KEEPING_HW_CARD
-    if (write_handle_bak) {
-        free(write_handle_bak);
-        write_handle_bak = NULL;
-    }
-#endif
+// #if KEEPING_HW_CARD
+//     if (write_handle_bak) {
+//         free(write_handle_bak);
+//         write_handle_bak = NULL;
+//     }
+// #endif
 
     if (capture_handle)
         snd_pcm_close(capture_handle);
