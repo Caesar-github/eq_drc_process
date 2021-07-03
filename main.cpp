@@ -1229,7 +1229,7 @@ repeat:
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
 
-    eq_debug("\n==========EQ/DRC process release version 1.26 20210703_05===============\n");
+    eq_debug("\n==========EQ/DRC process release version 1.26 20210703_07===============\n");
     eq_debug("==========KEEPING_HW_CARD: %d===============\n", KEEPING_HW_CARD);
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
@@ -1447,6 +1447,7 @@ repeat:
         }
 
         if(write_handle != NULL) {
+#if 0
             if (skip_frame > 0) {
                 int err;
                 err = snd_pcm_writei(write_handle, silence_data, READ_FRAME);
@@ -1457,6 +1458,7 @@ repeat:
                 skip_frame--;
                 continue;
             }
+#endif
 
             //usleep(30*1000);
             err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
@@ -1476,12 +1478,31 @@ repeat:
             if (err < 0) {
                 if (err == -EPIPE) {
                     eq_err("[EQ] Underrun occurred from write: %d\n", err);
+#if 1
+                    err = snd_pcm_recover(write_handle, err, 0);
+                    if (err < 0) {
+                        eq_err( "[EQ] Error occured while writing: %s\n", snd_strerror(err));
+                        // usleep(200 * 1000);
+    #if 0
+                        if (write_handle) {
+                            // snd_pcm_close(write_handle);
+                            write_handle = NULL;
+                        }
+    #endif
+                        if (device_flag == DEVICE_FLAG_BLUETOOTH)
+                            g_bt_is_connect = BT_DISCONNECT;
+                    }
+#else
+                    eq_drc_xrun(write_handle, SND_PCM_STREAM_PLAYBACK);
+#endif
                 } else if (err == -EBADFD) {
                     int err;
 
-                    eq_err("====[EQ] %d, EBADFD and re-open snd\n", __LINE__);
+                    eq_err("====[EQ] %d, EBADFD and re-open sound, write_handle: 0x%x\n", __LINE__, write_handle);
 
-                    snd_pcm_close(write_handle);
+                    if (write_handle)
+                        snd_pcm_close(write_handle);
+
                     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
                     if (err < 0) {
                         eq_err("LINE: %d, open playback device failed, exit eq\n", __LINE__);
@@ -1490,23 +1511,6 @@ repeat:
 
                     write_handle_bak = write_handle;
                 }
-#if 1
-                err = snd_pcm_recover(write_handle, err, 0);
-                if (err < 0) {
-                    eq_err( "[EQ] Error occured while writing: %s\n", snd_strerror(err));
-                    // usleep(200 * 1000);
-
-                    if (write_handle) {
-                        // snd_pcm_close(write_handle);
-                        write_handle = NULL;
-                    }
-
-                    if (device_flag == DEVICE_FLAG_BLUETOOTH)
-                        g_bt_is_connect = BT_DISCONNECT;
-                }
-#else
-                eq_drc_xrun(write_handle, SND_PCM_STREAM_PLAYBACK);
-#endif
             }
         }else if (socket_fd >= 0) {
             if (g_bt_is_connect == BT_CONNECT_BSA) {
