@@ -11,10 +11,13 @@
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <getopt.h>
 
 #include "eq_log.h"
 #include "Rk_wake_lock.h"
 #include "Rk_socket_app.h"
+
+#define EQ_DRC_PROCESS_VERSION      "1.26 20210704"
 
 #define SOC_IS_RK3308           (0x1)
 #define SOC_IS_RK3326           (0x2)
@@ -31,8 +34,7 @@
 #define PERIOD_SIZE (READ_FRAME)  //(SAMPLE_RATE/8)
 #define PERIOD_counts (8) //double of delay 3*21.3=64ms
 #define BUFFER_SIZE (PERIOD_SIZE * PERIOD_counts) // keep a large buffer_size
-#define MUTE_TIME_THRESHOD (3)//seconds
-#define MUTE_FRAME_THRESHOD (SAMPLE_RATE * MUTE_TIME_THRESHOD / READ_FRAME)//30 seconds
+#define MUTE_TIME_DEFAULT (3)//seconds
 //#define ALSA_READ_FORMAT SND_PCM_FORMAT_S32_LE
 #define ALSA_READ_FORMAT SND_PCM_FORMAT_S16_LE
 #define ALSA_WRITE_FORMAT SND_PCM_FORMAT_S16_LE
@@ -1183,9 +1185,42 @@ out_xrun:
 }
 #endif
 
-int main()
+static void usage(char *command)
 {
-    int err;
+    snd_pcm_format_t k;
+    printf(
+"Usage: %s [OPTION]...\n"
+"\n"
+"-h, --help              help\n"
+"-v  --version           print current version\n"
+"-s, --seconds           close sound card after playback is stopped seconds (default 3s)\n",
+    command);
+}
+
+static long parse_long(const char *str, int *err)
+{
+    long val;
+    char *endptr;
+
+    errno = 0;
+    val = strtol(str, &endptr, 0);
+
+    if (errno != 0 || *endptr != '\0')
+        *err = -1;
+    else
+        *err = 0;
+
+    return val;
+}
+
+static void get_version(char *command)
+{
+    printf("%s: version " EQ_DRC_PROCESS_VERSION " by Rockchip\n", command);
+}
+
+int main(int argc, char *argv[])
+{
+    int err, c;
     snd_pcm_t *capture_handle, *write_handle;
     short buffer[READ_FRAME * PERIOD_counts * CHANNEL];
     unsigned int sampleRate, channels;
@@ -1201,6 +1236,39 @@ int main()
     char *silence_data = (char *)calloc(READ_FRAME * 2 * 2, 1);//2ch 16bit
     int socket_fd = -1;
     clock_t startProcTime, endProcTime;
+
+    #define MUTE_FRAME_THRESHOD (SAMPLE_RATE * MUTE_TIME_DEFAULT / READ_FRAME)//30 seconds
+    int mute_time = MUTE_TIME_DEFAULT;
+    int option_index;
+    static char *command = argv[0];
+    static const char short_options[] = "hvs:";
+    static const struct option long_options[] = {
+        {"help", 0, 0, 'h'},
+        {"version", 0, 0, 'v'},
+        {"seconds", 1, 0, 's'},
+        {0, 0, 0, 0}
+    };
+
+    while ((c = getopt_long(argc, argv, short_options, long_options, &option_index)) != -1) {
+    switch (c) {
+    case 'h':
+        usage(command);
+        return 0;
+    case 'v':
+        get_version(command);
+        return 0;
+    case 's':
+        mute_time = parse_long(optarg, &err);
+        if (err < 0) {
+            eq_err("[EQ] invalid mute_time argument '%s'\n", optarg);
+            return -1;
+        }
+        break;
+    default:
+            eq_err("[EQ] Try `%s --help' for more information.\n", command);
+            return 1;
+        }
+    }
 
     // wake_lock = RK_wake_lock_new("eq_drc_process");
 
@@ -1223,13 +1291,13 @@ repeat:
     memset((char *)silence_data, 0, sizeof(silence_data));
     sampleRate = SAMPLE_RATE;
     channels = CHANNEL;
-    mute_frame_thd = (int)MUTE_FRAME_THRESHOD;
+    mute_frame_thd = (int)(SAMPLE_RATE * mute_time / READ_FRAME);
     mute_frame = 0;
     /* LINE_OUT is the default output device */
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
 
-    eq_debug("\n==========EQ/DRC process release version 1.26 20210703_07===============\n");
+    eq_debug("\n==========EQ/DRC process release version 1.26 %s==============\n", EQ_DRC_PROCESS_VERSION);
     eq_debug("==========KEEPING_HW_CARD: %d===============\n", KEEPING_HW_CARD);
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
@@ -1363,7 +1431,7 @@ repeat:
                     eq_err("[EQ] suspend and close write handle for you right now!\n");
                     power_state = POWER_STATE_SUSPEND;
                 } else {
-                    eq_err("[EQ] %d second no playback, close write handle for you now!\n ", MUTE_TIME_THRESHOD);
+                    eq_err("[EQ] %d second no playback, close write handle for you now!\n ", mute_time);
                 }
 
                 user_play_state = USER_PLAY_CLOSED;
