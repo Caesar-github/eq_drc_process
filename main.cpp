@@ -61,7 +61,7 @@ enum BT_CONNECT_STATE{
 #define USER_PLAY_STATUS        "/dev/snd/pcmC7D0p"
 #define USER_CAPT_STATUS        "/dev/snd/pcmC0D0c"
 
-#define KEEPING_HW_CARD         1
+#define KEEPING_HW_CARD         0
 
 struct user_play_inotify {
     int fd;
@@ -1317,12 +1317,6 @@ repeat:
     }
 
 #if KEEPING_HW_CARD
-    // write_handle_bak = (snd_pcm_t **)malloc(sizeof(snd_pcm_t *));
-    // if (write_handle_bak == NULL) {
-    //     eq_err("====[EQ] allocate write_handle_bak failed\n");
-    //     return -1;
-    // }
-    // *write_handle_bak = write_handle;
     write_handle_bak = write_handle;
     eq_info("[EQ] init write_handle_bak: 0x%x write_handle: 0x%x\n",
         write_handle_bak, write_handle);
@@ -1609,13 +1603,6 @@ error:
     eq_debug("=== [EQ] Exit eq ===\n");
 
     g_upi.stop = 1;
-
-// #if KEEPING_HW_CARD
-//     if (write_handle_bak) {
-//         free(write_handle_bak);
-//         write_handle_bak = NULL;
-//     }
-// #endif
 
     if (capture_handle)
         snd_pcm_close(capture_handle);
