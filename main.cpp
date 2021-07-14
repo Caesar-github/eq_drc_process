@@ -1571,7 +1571,9 @@ repeat:
                         return -1;
                     }
 
+#if KEEPING_HW_CARD
                     write_handle_bak = write_handle;
+#endif
                 }
             }
         }else if (socket_fd >= 0) {
