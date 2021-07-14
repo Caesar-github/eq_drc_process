@@ -30,7 +30,7 @@
 #define WRITE_DEVICE_NAME "fake_play"
 #define JACK_DEVICE_NAME "fake_jack"
 #define JACK2_DEVICE_NAME "fake_jack2"
-#define READ_FRAME  1920    //(768)
+#define READ_FRAME  768    //(768)
 #define PERIOD_SIZE (READ_FRAME)  //(SAMPLE_RATE/8)
 #define PERIOD_counts (8) //double of delay 3*21.3=64ms
 #define BUFFER_SIZE (PERIOD_SIZE * PERIOD_counts) // keep a large buffer_size
@@ -1226,7 +1226,7 @@ int main(int argc, char *argv[])
     unsigned int sampleRate, channels;
     int mute_frame_thd, mute_frame, skip_frame = 0;
     /* LINE_OUT is the default output device */
-    int device_flag, new_flag;
+    int device_flag, new_flag, last_flag;
     pthread_t a2dp_status_listen_thread;
     pthread_t user_play_status_listen_thread;
     // pthread_t user_capt_status_listen_thread;
@@ -1296,6 +1296,7 @@ repeat:
     /* LINE_OUT is the default output device */
     device_flag = DEVICE_FLAG_LINE_OUT;
     new_flag = DEVICE_FLAG_LINE_OUT;
+    last_flag = DEVICE_FLAG_LINE_OUT;
 
     eq_debug("\n==========EQ/DRC process release version 1.26 %s==============\n", EQ_DRC_PROCESS_VERSION);
     eq_debug("==========KEEPING_HW_CARD: %d===============\n", KEEPING_HW_CARD);
@@ -1413,8 +1414,13 @@ repeat:
 #endif
 
 #if KEEPING_HW_CARD
-                system("amixer sset 'Playback Path' OFF");
-                eq_info("[EQ] disable HP path and PA\n");
+                if (device_flag == DEVICE_FLAG_LINE_OUT) {
+                    system("amixer sset 'Playback Path' OFF");
+                    eq_info("[EQ] disable Playback path and PA\n");
+                } else {
+                    snd_pcm_close(write_handle);
+                    eq_info("[EQ]: %d Close sound card\n", __LINE__);
+                }
 #else
                 snd_pcm_close(write_handle);
 #endif
@@ -1441,6 +1447,7 @@ repeat:
             continue;
         }
 
+        last_flag = device_flag;
         new_flag = get_device_flag();
         if (new_flag != device_flag) {
             eq_debug("\n[EQ] Device route changed, from\"%s\" to \"%s\"\n\n",
@@ -1463,11 +1470,26 @@ repeat:
             // RK_acquire_wake_lock(wake_lock);
 #if KEEPING_HW_CARD
             if (device_flag == DEVICE_FLAG_LINE_OUT) {
-                write_handle = write_handle_bak;
-                system("amixer sset 'Playback Path' HP");
-                eq_info("[EQ] enable HP path and PA, write_handle: 0x%x\n", write_handle);
-                // snd_pcm_forward(write_handle, READ_FRAME);
-                // continue;
+                if (last_flag == DEVICE_FLAG_ANALOG_HP ||
+                    last_flag == DEVICE_FLAG_DIGITAL_HP) {
+                    eq_info("[EQ]: %d switch device_flag: %d and open start, write_handle_bak: 0x%x\n",
+                        __LINE__, device_flag, write_handle_bak);
+
+                    err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
+                    if (err < 0) {
+                        eq_err("LINE: %d, device_flag: %d open playback device failed, exit eq\n", __LINE__, device_flag);
+                        return -1;
+                    }
+                    write_handle_bak = write_handle;
+                    eq_info("[EQ]: %d switch device_flag: %d and open end,  write_handle_bak: 0x%x\n",
+                        __LINE__, device_flag, write_handle_bak);
+                } else {
+                    write_handle = write_handle_bak;
+                    system("amixer sset 'Playback Path' SPK");
+                    eq_info("[EQ] enable Playback path and PA, write_handle: 0x%x\n", write_handle);
+                    // snd_pcm_forward(write_handle, READ_FRAME);
+                    // continue;
+                }
             } else if (device_flag == DEVICE_FLAG_BLUETOOTH_BSA) {
                 err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
                 if (err < 0 || (write_handle == NULL && socket_fd < 0)) {
@@ -1477,6 +1499,24 @@ repeat:
                 } else {
                     eq_info("[EQ] enable DEVICE_FLAG_BLUETOOTH_BSA, write_handle: 0x%x\n", write_handle);
                 }
+            } else if (device_flag == DEVICE_FLAG_ANALOG_HP ||
+                       device_flag == DEVICE_FLAG_DIGITAL_HP) {
+                if (last_flag == DEVICE_FLAG_LINE_OUT) {
+                    // system("amixer sset 'Playback Path' OFF");
+                    // eq_info("[EQ] disable Playback path and PA\n");
+                    snd_pcm_close(write_handle_bak);
+                    // write_handle = NULL;
+                    write_handle_bak = NULL;
+                    eq_info("[EQ]: %d Close sound card\n", __LINE__);
+                }
+
+                err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
+                if (err < 0) {
+                    eq_err("LINE: %d, device_flag: %d open playback device failed, exit eq\n", __LINE__, device_flag);
+                    return -1;
+                }
+                eq_info("[EQ]: %d switch device_flag: %d and open\n", __LINE__, device_flag);
+                write_handle_bak = write_handle;
             }
 #else
             err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
@@ -1549,9 +1589,11 @@ repeat:
                     if (err < 0) {
                         eq_err( "[EQ] Error occured while writing: %s\n", snd_strerror(err));
                         // usleep(200 * 1000);
-    #if 0
+    #if KEEPING_HW_CARD
+                        /* Do nothing */
+    #else
                         if (write_handle) {
-                            // snd_pcm_close(write_handle);
+                            snd_pcm_close(write_handle);
                             write_handle = NULL;
                         }
     #endif
@@ -1561,7 +1603,9 @@ repeat:
 #else
                     eq_drc_xrun(write_handle, SND_PCM_STREAM_PLAYBACK);
 #endif
-                } else if (err == -EBADFD) {
+                }
+#if KEEPING_HW_CARD
+                else if (err == -EBADFD) {
                     int err;
 
                     eq_err("====[EQ] %d, EBADFD and re-open sound, write_handle: 0x%x\n", __LINE__, write_handle);
@@ -1575,10 +1619,9 @@ repeat:
                         return -1;
                     }
 
-#if KEEPING_HW_CARD
                     write_handle_bak = write_handle;
-#endif
                 }
+#endif
             }
         }else if (socket_fd >= 0) {
             if (g_bt_is_connect == BT_CONNECT_BSA) {
