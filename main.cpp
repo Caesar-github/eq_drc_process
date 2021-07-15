@@ -589,8 +589,8 @@ int alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
     }
 
     if (write_err) {
-        eq_err("[EQ_WRITE_OPEN] Unable to open playback PCM device\n");
-        return -1;
+        eq_err("[EQ_WRITE_OPEN] Unable to open playback PCM device: %d\n", write_err);
+        return write_err;
     }
     eq_debug("[EQ_WRITE_OPEN] interleaved mode\n");
 
@@ -1455,7 +1455,10 @@ repeat:
             device_flag = new_flag;
             if (write_handle) {
 #if KEEPING_HW_CARD
-                /* Do nothing */
+                if (device_flag != DEVICE_FLAG_BLUETOOTH_BSA) {
+                    snd_pcm_close(write_handle);
+                    eq_info("[EQ]: %d Close sound card\n", __LINE__);
+                }
 #else
                 snd_pcm_close(write_handle);
 #endif
@@ -1501,19 +1504,15 @@ repeat:
                 }
             } else if (device_flag == DEVICE_FLAG_ANALOG_HP ||
                        device_flag == DEVICE_FLAG_DIGITAL_HP) {
-                if (last_flag == DEVICE_FLAG_LINE_OUT) {
-                    // system("amixer sset 'Playback Path' OFF");
-                    // eq_info("[EQ] disable Playback path and PA\n");
-                    snd_pcm_close(write_handle_bak);
-                    // write_handle = NULL;
-                    write_handle_bak = NULL;
-                    eq_info("[EQ]: %d Close sound card\n", __LINE__);
-                }
-
                 err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
                 if (err < 0) {
-                    eq_err("LINE: %d, device_flag: %d open playback device failed, exit eq\n", __LINE__, device_flag);
-                    return -1;
+                    eq_err("[EQ] Maybe ignore(%d): Route change failed! Using default audio path.\n", err);
+                    if (device_flag == DEVICE_FLAG_DIGITAL_HP) {
+                        /* Maybe need to more prepare some time for digital headphone */
+                        usleep(200 * 1000);
+                    }
+
+                    continue;
                 }
                 eq_info("[EQ]: %d switch device_flag: %d and open\n", __LINE__, device_flag);
                 write_handle_bak = write_handle;
