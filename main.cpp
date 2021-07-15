@@ -61,7 +61,14 @@ enum BT_CONNECT_STATE{
 #define USER_PLAY_STATUS        "/dev/snd/pcmC7D0p"
 #define USER_CAPT_STATUS        "/dev/snd/pcmC0D0c"
 
+/**
+ * 0: By default and universal
+ * 1: More fast but only used for RK817 or RK809 Codec
+ */
 #define KEEPING_HW_CARD         1
+#if KEEPING_HW_CARD
+#define HW_CARD_PATH_DEFAULT    "SPK"
+#endif
 
 struct user_play_inotify {
     int fd;
@@ -97,6 +104,10 @@ static int g_read_frame = READ_FRAME_DEFAULT;
 static int g_period_size = PERIOD_SIZE_DEFAULT;
 static int g_period_counts = PERIOD_COUNTS_DEFAULT;
 static int g_buffer_size = BUFFER_SIZE_DEFAULT;
+
+#if KEEPING_HW_CARD
+static char g_path_name[32];
+#endif
 
 static struct user_play_inotify g_upi;
 static struct user_capt_inotify g_uci;
@@ -1201,6 +1212,9 @@ static void usage(char *command)
 "-s, --seconds           close sound card after playback is stopped seconds (default: 3s)\n"
 "-p, --period-size       specify the size of the frame period (default: 768)\n"
 "-n, --period-counts     specify the count of the frame periods (default: 8)\n"
+#if KEEPING_HW_CARD
+"-P, --path-name         specify the name of playback path for RK817/RK809 codec (default: SPK)\n"
+#endif
     ,
     command);
 }
@@ -1247,15 +1261,21 @@ int main(int argc, char *argv[])
     int mute_time = MUTE_TIME_DEFAULT;
     int option_index;
     static char *command = argv[0];
-    static const char short_options[] = "hvs:p:n:";
+    static const char short_options[] = "hvs:p:n:P:";
     static const struct option long_options[] = {
         {"help", 0, 0, 'h'},
         {"version", 0, 0, 'v'},
         {"seconds", 1, 0, 's'},
         {"period-size", 1, 0, 'p'},
         {"period-counts", 1, 0, 'n'},
+#if KEEPING_HW_CARD
+        {"path-name", 1, 0, 'P'},
+#endif
         {0, 0, 0, 0}
     };
+
+    memset(g_path_name, 0, sizeof(g_path_name));
+    strcpy(g_path_name, HW_CARD_PATH_DEFAULT);
 
     while ((c = getopt_long(argc, argv, short_options, long_options, &option_index)) != -1) {
     switch (c) {
@@ -1287,6 +1307,12 @@ int main(int argc, char *argv[])
             return -1;
         }
         break;
+#if KEEPING_HW_CARD
+    case 'P':
+        memset(g_path_name, 0, sizeof(g_path_name));
+        strcpy(g_path_name, optarg);
+        break;
+#endif
     default:
             eq_err("[EQ] Try `%s --help' for more information.\n", command);
             return 1;
@@ -1344,7 +1370,11 @@ repeat:
     eq_debug("\n==========EQ/DRC process release version 1.26 %s==============\n", EQ_DRC_PROCESS_VERSION);
     eq_debug("==========KEEPING_HW_CARD: %d===============\n", KEEPING_HW_CARD);
     eq_debug("===== g_read_frame:%d g_period_size:%d g_period_counts:%d g_buffer_size:%d =====\n",
-             g_read_frame, g_period_size, g_period_counts, g_buffer_size);
+                g_read_frame, g_period_size, g_period_counts, g_buffer_size);
+#if KEEPING_HW_CARD
+    eq_debug("===== g_path_name: %s =====\n", g_path_name);
+#endif
+
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
 #if KEEPING_HW_CARD
@@ -1537,8 +1567,12 @@ repeat:
                     eq_info("[EQ]: %d switch device_flag: %d and open end, write_handle: 0x%x | 0x%x\n",
                         __LINE__, device_flag, write_handle, write_handle_bak);
                 } else {
+                    char cmd_str[64] = { 0 };
+
                     write_handle = write_handle_bak;
-                    system("amixer sset 'Playback Path' SPK");
+
+                    sprintf(cmd_str, "amixer sset 'Playback Path' %s", g_path_name);
+                    system(cmd_str);
                     eq_info("[EQ] enable Playback path and PA, write_handle: 0x%x\n", write_handle);
                     // snd_pcm_forward(write_handle, g_read_frame);
                     // continue;
