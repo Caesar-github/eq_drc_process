@@ -30,11 +30,11 @@
 #define WRITE_DEVICE_NAME "fake_play"
 #define JACK_DEVICE_NAME "fake_jack"
 #define JACK2_DEVICE_NAME "fake_jack2"
-#define READ_FRAME  768    //(768)
-#define PERIOD_SIZE (READ_FRAME)  //(SAMPLE_RATE/8)
-#define PERIOD_counts (8) //double of delay 3*21.3=64ms
-#define BUFFER_SIZE (PERIOD_SIZE * PERIOD_counts) // keep a large buffer_size
-#define MUTE_TIME_DEFAULT (3)//seconds
+#define READ_FRAME_DEFAULT      768
+#define PERIOD_SIZE_DEFAULT     (READ_FRAME_DEFAULT)
+#define PERIOD_COUNTS_DEFAULT   (8)
+#define BUFFER_SIZE_DEFAULT     (PERIOD_SIZE_DEFAULT * PERIOD_COUNTS_DEFAULT) /* Keeping a large buffer_size ASAP */
+#define MUTE_TIME_DEFAULT       (3) /* seconds */
 //#define ALSA_READ_FORMAT SND_PCM_FORMAT_S32_LE
 #define ALSA_READ_FORMAT SND_PCM_FORMAT_S16_LE
 #define ALSA_WRITE_FORMAT SND_PCM_FORMAT_S16_LE
@@ -92,6 +92,11 @@ enum {
     POWER_STATE_SUSPENDING,
     POWER_STATE_SUSPEND,
 };
+
+static int g_read_frame = READ_FRAME_DEFAULT;
+static int g_period_size = PERIOD_SIZE_DEFAULT;
+static int g_period_counts = PERIOD_COUNTS_DEFAULT;
+static int g_buffer_size = BUFFER_SIZE_DEFAULT;
 
 static struct user_play_inotify g_upi;
 static struct user_capt_inotify g_uci;
@@ -452,8 +457,8 @@ err:
 void alsa_fake_device_record_open(snd_pcm_t** capture_handle,int channels,uint32_t rate)
 {
     snd_pcm_hw_params_t *hw_params;
-    snd_pcm_uframes_t periodSize = PERIOD_SIZE;
-    snd_pcm_uframes_t bufferSize = BUFFER_SIZE;
+    snd_pcm_uframes_t periodSize = g_period_size;
+    snd_pcm_uframes_t bufferSize = g_buffer_size;
     int dir = 0;
     int err;
 
@@ -553,8 +558,8 @@ int alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
                                  int *socket_fd)
 {
     snd_pcm_hw_params_t *write_params;
-    snd_pcm_uframes_t write_periodSize = PERIOD_SIZE;
-    snd_pcm_uframes_t write_bufferSize = BUFFER_SIZE;
+    snd_pcm_uframes_t write_periodSize = g_period_size;
+    snd_pcm_uframes_t write_bufferSize = g_buffer_size;
     int write_err;
     int write_dir;
     char bluealsa_device[256] = {0};
@@ -732,7 +737,7 @@ failed:
     return -1;
 }
 
-int is_mute_frame(short *in,unsigned int size)
+static int is_mute_frame(short *in,unsigned int size)
 {
     int i;
     int mute_count = 0;
@@ -1193,7 +1198,10 @@ static void usage(char *command)
 "\n"
 "-h, --help              help\n"
 "-v  --version           print current version\n"
-"-s, --seconds           close sound card after playback is stopped seconds (default 3s)\n",
+"-s, --seconds           close sound card after playback is stopped seconds (default: 3s)\n"
+"-p, --period-size       specify the size of the frame period (default: 768)\n"
+"-n, --period-counts     specify the count of the frame periods (default: 8)\n"
+    ,
     command);
 }
 
@@ -1222,7 +1230,7 @@ int main(int argc, char *argv[])
 {
     int err, c;
     snd_pcm_t *capture_handle, *write_handle;
-    short buffer[READ_FRAME * PERIOD_counts * CHANNEL];
+    char *buffer;
     unsigned int sampleRate, channels;
     int mute_frame_thd, mute_frame, skip_frame = 0;
     /* LINE_OUT is the default output device */
@@ -1233,19 +1241,19 @@ int main(int argc, char *argv[])
     // pthread_t power_status_listen_thread;
     // struct rk_wake_lock* wake_lock;
     bool low_power_mode = low_power_mode_check();
-    char *silence_data = (char *)calloc(READ_FRAME * 2 * 2, 1);//2ch 16bit
+    char *silence_data;
     int socket_fd = -1;
     clock_t startProcTime, endProcTime;
-
-    #define MUTE_FRAME_THRESHOD (SAMPLE_RATE * MUTE_TIME_DEFAULT / READ_FRAME)//30 seconds
     int mute_time = MUTE_TIME_DEFAULT;
     int option_index;
     static char *command = argv[0];
-    static const char short_options[] = "hvs:";
+    static const char short_options[] = "hvs:p:n:";
     static const struct option long_options[] = {
         {"help", 0, 0, 'h'},
         {"version", 0, 0, 'v'},
         {"seconds", 1, 0, 's'},
+        {"period-size", 1, 0, 'p'},
+        {"period-counts", 1, 0, 'n'},
         {0, 0, 0, 0}
     };
 
@@ -1264,10 +1272,45 @@ int main(int argc, char *argv[])
             return -1;
         }
         break;
+    case 'p':
+        g_period_size = parse_long(optarg, &err);
+        if (err < 0) {
+            eq_err("[EQ] invalid g_period_size argument '%s'\n", optarg);
+            return -1;
+        }
+        g_read_frame = g_period_size;
+        break;
+    case 'n':
+        g_period_counts = parse_long(optarg, &err);
+        if (err < 0) {
+            eq_err("[EQ] invalid g_period_counts argument '%s'\n", optarg);
+            return -1;
+        }
+        break;
     default:
             eq_err("[EQ] Try `%s --help' for more information.\n", command);
             return 1;
         }
+    }
+
+    if (g_period_size == 0 || g_period_counts == 0) {
+        eq_err("[EQ] g_period_size:%d or g_period_size:%d is zero!\n",
+               g_period_size, g_period_counts);
+        return -1;
+    }
+
+    g_buffer_size = g_period_size * g_period_counts;
+
+    buffer = (char *)malloc(g_read_frame * g_period_counts * CHANNEL * sizeof(int16_t));
+    if (!buffer) {
+        eq_err("[EQ] Alloc buffer failed\n");
+        return -1;
+    }
+
+    silence_data = (char *)malloc(g_read_frame * sizeof(int16_t) * CHANNEL); /* 2ch 16bit */
+    if (!silence_data) {
+        eq_err("[EQ] Alloc silence_data failed\n");
+        return -1;
     }
 
     // wake_lock = RK_wake_lock_new("eq_drc_process");
@@ -1291,7 +1334,7 @@ repeat:
     memset((char *)silence_data, 0, sizeof(silence_data));
     sampleRate = SAMPLE_RATE;
     channels = CHANNEL;
-    mute_frame_thd = (int)(SAMPLE_RATE * mute_time / READ_FRAME);
+    mute_frame_thd = (int)(SAMPLE_RATE * mute_time / g_read_frame);
     mute_frame = 0;
     /* LINE_OUT is the default output device */
     device_flag = DEVICE_FLAG_LINE_OUT;
@@ -1300,6 +1343,8 @@ repeat:
 
     eq_debug("\n==========EQ/DRC process release version 1.26 %s==============\n", EQ_DRC_PROCESS_VERSION);
     eq_debug("==========KEEPING_HW_CARD: %d===============\n", KEEPING_HW_CARD);
+    eq_debug("===== g_read_frame:%d g_period_size:%d g_period_counts:%d g_buffer_size:%d =====\n",
+             g_read_frame, g_period_size, g_period_counts, g_buffer_size);
     alsa_fake_device_record_open(&capture_handle, channels, sampleRate);
 
 #if KEEPING_HW_CARD
@@ -1327,14 +1372,14 @@ repeat:
 
     while (1) {
         // startProcTime = clock();
-        err = snd_pcm_readi(capture_handle, buffer , READ_FRAME);
+        err = snd_pcm_readi(capture_handle, buffer, g_read_frame);
         // endProcTime = clock();
         // printf("snd_pcm_readi cost_time: %ld us\n", endProcTime - startProcTime);
-        if (err != READ_FRAME) {
+        if (err != g_read_frame) {
             if (err == -ESTRPIPE) {
                 eq_err("====[EQ] LINE: %d system suspend and resumed\n", __LINE__);
             } else {
-                eq_err("====[EQ] LINE: %d read frame error = %d, not %d\n", __LINE__, err, READ_FRAME);
+                eq_err("====[EQ] LINE: %d read frame error = %d, not %d\n", __LINE__, err, g_read_frame);
             }
         }
 
@@ -1356,7 +1401,7 @@ repeat:
 
         if (g_system_sleep)
             mute_frame = mute_frame_thd;
-        else if(low_power_mode && is_mute_frame(buffer, channels * READ_FRAME))
+        else if(low_power_mode && is_mute_frame((short *)buffer, channels * g_read_frame))
             mute_frame ++;
         else
             mute_frame = 0;
@@ -1382,8 +1427,8 @@ repeat:
 #if 1 // fade-out
                 int64_t start = 0;
                 int fade_type = FADE_OUT;
-                int nb_samples = READ_FRAME * PERIOD_counts;
-                int buf_bytes = READ_FRAME * channels * sizeof(short) * PERIOD_counts;
+                int nb_samples = g_read_frame * g_period_counts;
+                int buf_bytes = g_read_frame * channels * sizeof(short) * g_period_counts;
                 short *fade_buf, *src_buf;
                 int curve_type = IQSIN;
 
@@ -1441,8 +1486,8 @@ repeat:
 
 #if KEEPING_HW_CARD
             // if (write_handle == NULL) {
-                // snd_pcm_forward(write_handle_bak, READ_FRAME);
-                // eq_info("[EQ] forward %d frames\n", READ_FRAME);
+                // snd_pcm_forward(write_handle_bak, g_read_frame);
+                // eq_info("[EQ] forward %d frames\n", g_read_frame);
             // }
 #endif
 
@@ -1495,7 +1540,7 @@ repeat:
                     write_handle = write_handle_bak;
                     system("amixer sset 'Playback Path' SPK");
                     eq_info("[EQ] enable Playback path and PA, write_handle: 0x%x\n", write_handle);
-                    // snd_pcm_forward(write_handle, READ_FRAME);
+                    // snd_pcm_forward(write_handle, g_read_frame);
                     // continue;
                 }
             } else if (device_flag == DEVICE_FLAG_BLUETOOTH_BSA) {
@@ -1548,13 +1593,13 @@ repeat:
                 eq_debug("[EQ] feed mute data %d frame\n", num);
                 for (i = 0; i < num; i++) {
                     if(write_handle != NULL) {
-                        err = snd_pcm_writei(write_handle, silence_data, READ_FRAME);
-                        if(err != READ_FRAME)
-                            eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, READ_FRAME);
+                        err = snd_pcm_writei(write_handle, silence_data, g_read_frame);
+                        if(err != g_read_frame)
+                            eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, g_read_frame);
                     } else if (socket_fd >= 0) {
-                        err = RK_socket_send(socket_fd, silence_data, READ_FRAME * 4); //2ch 16bit
-                        if(err != (READ_FRAME * 4))
-                            eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, READ_FRAME * 4);
+                        err = RK_socket_send(socket_fd, silence_data, g_read_frame * 4); //2ch 16bit
+                        if(err != (g_read_frame * 4))
+                            eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, g_read_frame * 4);
                     }
                 }
             }
@@ -1564,9 +1609,9 @@ repeat:
 #if 0
             if (skip_frame > 0) {
                 int err;
-                err = snd_pcm_writei(write_handle, silence_data, READ_FRAME);
-                if(err != READ_FRAME)
-                    eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, READ_FRAME);
+                err = snd_pcm_writei(write_handle, silence_data, g_read_frame);
+                if(err != g_read_frame)
+                    eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, g_read_frame);
 
                 eq_err("skip_frame = %d\n", skip_frame);
                 skip_frame--;
@@ -1575,12 +1620,12 @@ repeat:
 #endif
 
             //usleep(30*1000);
-            err = snd_pcm_writei(write_handle, buffer, READ_FRAME);
-            if(err != READ_FRAME) {
-                eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, READ_FRAME);
+            err = snd_pcm_writei(write_handle, buffer, g_read_frame);
+            if(err != g_read_frame) {
+                eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, g_read_frame);
 
                 // if (err > 0) {
-                //     snd_pcm_sframes_t frames = READ_FRAME - err;
+                //     snd_pcm_sframes_t frames = g_read_frame - err;
                 //     startProcTime = clock();
                 //     frames = snd_pcm_forward(write_handle, frames);
                 //     endProcTime = clock();
@@ -1638,9 +1683,9 @@ repeat:
             }
         }else if (socket_fd >= 0) {
             if (g_bt_is_connect == BT_CONNECT_BSA) {
-                err = RK_socket_send(socket_fd, (char *)buffer, READ_FRAME * 4);
-                if (err != READ_FRAME * 4 && -EAGAIN != err)
-                    eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, READ_FRAME * 4);
+                err = RK_socket_send(socket_fd, (char *)buffer, g_read_frame * 4);
+                if (err != g_read_frame * 4 && -EAGAIN != err)
+                    eq_err("====[EQ] %d, write frame error = %d, not %d\n", __LINE__, err, g_read_frame * 4);
 
                 if (err < 0 && -EAGAIN != err) {
                     if (socket_fd >= 0) {
@@ -1663,6 +1708,16 @@ repeat:
 
 error:
     eq_debug("=== [EQ] Exit eq ===\n");
+
+    if (silence_data) {
+        free(silence_data);
+        silence_data = NULL;
+    }
+
+    if (buffer) {
+        free(buffer);
+        buffer = NULL;
+    }
 
     g_upi.stop = 1;
 
