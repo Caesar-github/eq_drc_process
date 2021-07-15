@@ -1474,7 +1474,8 @@ repeat:
 #if KEEPING_HW_CARD
             if (device_flag == DEVICE_FLAG_LINE_OUT) {
                 if (last_flag == DEVICE_FLAG_ANALOG_HP ||
-                    last_flag == DEVICE_FLAG_DIGITAL_HP) {
+                    last_flag == DEVICE_FLAG_DIGITAL_HP ||
+                    last_flag == DEVICE_FLAG_BLUETOOTH) {
                     eq_info("[EQ]: %d switch device_flag: %d and open start, write_handle_bak: 0x%x\n",
                         __LINE__, device_flag, write_handle_bak);
 
@@ -1503,7 +1504,8 @@ repeat:
                     eq_info("[EQ] enable DEVICE_FLAG_BLUETOOTH_BSA, write_handle: 0x%x\n", write_handle);
                 }
             } else if (device_flag == DEVICE_FLAG_ANALOG_HP ||
-                       device_flag == DEVICE_FLAG_DIGITAL_HP) {
+                       device_flag == DEVICE_FLAG_DIGITAL_HP ||
+                       device_flag == DEVICE_FLAG_BLUETOOTH) {
                 err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
                 if (err < 0) {
                     eq_err("[EQ] Maybe ignore(%d): Route change failed! Using default audio path.\n", err);
