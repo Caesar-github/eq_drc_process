@@ -1447,7 +1447,11 @@ repeat:
                    get_device_name(device_flag), get_device_name(new_flag));
             device_flag = new_flag;
             if (write_handle) {
-                // snd_pcm_close(write_handle);
+#if KEEPING_HW_CARD
+                /* Do nothing */
+#else
+                snd_pcm_close(write_handle);
+#endif
                 write_handle = NULL;
             }
         }
