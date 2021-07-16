@@ -1478,17 +1478,19 @@ repeat:
                 if (last_flag == DEVICE_FLAG_ANALOG_HP ||
                     last_flag == DEVICE_FLAG_DIGITAL_HP ||
                     last_flag == DEVICE_FLAG_BLUETOOTH) {
-                    eq_info("[EQ]: %d switch device_flag: %d and open start, write_handle_bak: 0x%x\n",
-                        __LINE__, device_flag, write_handle_bak);
+                    eq_info("[EQ]: %d switch device_flag: %d and open start, write_handle: 0x%x | 0x%x\n",
+                        __LINE__, device_flag, write_handle, write_handle_bak);
 
                     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
                     if (err < 0) {
                         eq_err("LINE: %d, device_flag: %d open playback device failed, exit eq\n", __LINE__, device_flag);
                         return -1;
+                        // eq_err("LINE: %d, device_flag: %d open playback device failed, continue\n", __LINE__, device_flag);
+                        // continue;
                     }
                     write_handle_bak = write_handle;
-                    eq_info("[EQ]: %d switch device_flag: %d and open end,  write_handle_bak: 0x%x\n",
-                        __LINE__, device_flag, write_handle_bak);
+                    eq_info("[EQ]: %d switch device_flag: %d and open end, write_handle: 0x%x | 0x%x\n",
+                        __LINE__, device_flag, write_handle, write_handle_bak);
                 } else {
                     write_handle = write_handle_bak;
                     system("amixer sset 'Playback Path' SPK");
@@ -1508,14 +1510,17 @@ repeat:
             } else if (device_flag == DEVICE_FLAG_ANALOG_HP ||
                        device_flag == DEVICE_FLAG_DIGITAL_HP ||
                        device_flag == DEVICE_FLAG_BLUETOOTH) {
+                eq_info("[EQ] line:%d device_flag:%d write_handle: 0x%x\n", __LINE__, device_flag, write_handle);
+
                 err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
                 if (err < 0) {
                     eq_err("[EQ] Maybe ignore(%d): write_handle: 0x%x. Using default audio path.\n", err, write_handle);
                     if (device_flag == DEVICE_FLAG_DIGITAL_HP) {
                         /* Maybe need to more prepare some time for digital headphone */
                         usleep(200 * 1000);
+                        last_flag = DEVICE_FLAG_DIGITAL_HP;
+                        device_flag = DEVICE_FLAG_LINE_OUT;
                     }
-
                     continue;
                 }
                 eq_info("[EQ]: %d switch device_flag: %d and open\n", __LINE__, device_flag);
@@ -1613,13 +1618,18 @@ repeat:
 
                     eq_err("====[EQ] %d, EBADFD and re-open sound, write_handle: 0x%x\n", __LINE__, write_handle);
 
-                    if (write_handle)
+                    if (write_handle) {
                         snd_pcm_close(write_handle);
+                        write_handle = NULL;
+                    }
 
                     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
                     if (err < 0) {
-                        eq_err("LINE: %d, open playback device failed, exit eq\n", __LINE__);
-                        return -1;
+                        // eq_err("LINE: %d, open playback device failed, exit eq\n", __LINE__);
+                        eq_err("LINE: %d, open playback device failed, continue\n", __LINE__);
+                        write_handle_bak = write_handle;
+                        // return -1;
+                        continue;
                     }
 
                     write_handle_bak = write_handle;
