@@ -61,7 +61,7 @@ enum BT_CONNECT_STATE{
 #define USER_PLAY_STATUS        "/dev/snd/pcmC7D0p"
 #define USER_CAPT_STATUS        "/dev/snd/pcmC0D0c"
 
-#define KEEPING_HW_CARD         0
+#define KEEPING_HW_CARD         1
 
 struct user_play_inotify {
     int fd;
