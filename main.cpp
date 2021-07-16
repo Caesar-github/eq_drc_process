@@ -1361,10 +1361,12 @@ repeat:
         else
             mute_frame = 0;
 
-        if ((g_bt_is_connect == BT_DISCONNECT) && (socket_fd >= 0)) {
+        if (device_flag == DEVICE_FLAG_BLUETOOTH_BSA) {
+            if ((g_bt_is_connect == BT_DISCONNECT) && (socket_fd >= 0)) {
                 eq_debug("[EQ] bsa bt source disconnect, teardown client socket\n");
                 RK_socket_client_teardown(socket_fd);
                 socket_fd = -1;
+            }
         }
 
         // eq_info("[EQ] user_play_state=%d\n", user_play_state);
@@ -1508,7 +1510,7 @@ repeat:
                        device_flag == DEVICE_FLAG_BLUETOOTH) {
                 err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
                 if (err < 0) {
-                    eq_err("[EQ] Maybe ignore(%d): Route change failed! Using default audio path.\n", err);
+                    eq_err("[EQ] Maybe ignore(%d): write_handle: 0x%x. Using default audio path.\n", err, write_handle);
                     if (device_flag == DEVICE_FLAG_DIGITAL_HP) {
                         /* Maybe need to more prepare some time for digital headphone */
                         usleep(200 * 1000);
