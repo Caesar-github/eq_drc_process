@@ -1548,6 +1548,8 @@ repeat:
 
         while (write_handle == NULL && socket_fd < 0) {
             // RK_acquire_wake_lock(wake_lock);
+            eq_info("[EQ] device_flag: %d, %s, write_handle: 0x%x, socket_fd: %d\n",
+                    device_flag, get_device_name(device_flag), write_handle, socket_fd);
 #if KEEPING_HW_CARD
             if (device_flag == DEVICE_FLAG_LINE_OUT) {
                 if (last_flag == DEVICE_FLAG_ANALOG_HP ||
