@@ -137,7 +137,7 @@ static struct epoll_event g_PendingEventItems[EPOLL_MAX_EVENTS];
 static struct file_name_fd_desc g_file_name_fd_desc[ARRAY_LENGTH];
 static int array_index = 0;
 
-static char *base_dir = "/sys/power";
+static const char *base_dir = "/sys/power";
 
 /* hanlding fade-in or fade-out */
 #define FADE_IN             0
