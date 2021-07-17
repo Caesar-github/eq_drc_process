@@ -17,7 +17,7 @@
 #include "Rk_wake_lock.h"
 #include "Rk_socket_app.h"
 
-#define EQ_DRC_PROCESS_VERSION      "1.27 20210715"
+#define EQ_DRC_PROCESS_VERSION      "1.28 20210717"
 
 #define SOC_IS_RK3308           (0x1)
 #define SOC_IS_RK3326           (0x2)
@@ -1367,7 +1367,7 @@ repeat:
     new_flag = DEVICE_FLAG_LINE_OUT;
     last_flag = DEVICE_FLAG_LINE_OUT;
 
-    eq_debug("\n==========EQ/DRC process release version 1.26 %s==============\n", EQ_DRC_PROCESS_VERSION);
+    eq_debug("\n==========EQ/DRC process release version %s==============\n", EQ_DRC_PROCESS_VERSION);
     eq_debug("==========KEEPING_HW_CARD: %d===============\n", KEEPING_HW_CARD);
     eq_debug("===== g_read_frame:%d g_period_size:%d g_period_counts:%d g_buffer_size:%d =====\n",
                 g_read_frame, g_period_size, g_period_counts, g_buffer_size);
