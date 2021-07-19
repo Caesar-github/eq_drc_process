@@ -1274,8 +1274,10 @@ int main(int argc, char *argv[])
         {0, 0, 0, 0}
     };
 
+#if KEEPING_HW_CARD
     memset(g_path_name, 0, sizeof(g_path_name));
     strcpy(g_path_name, HW_CARD_PATH_DEFAULT);
+#endif
 
     while ((c = getopt_long(argc, argv, short_options, long_options, &option_index)) != -1) {
     switch (c) {
