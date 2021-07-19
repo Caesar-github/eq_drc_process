@@ -1255,6 +1255,7 @@ int main(int argc, char *argv[])
     // pthread_t power_status_listen_thread;
     // struct rk_wake_lock* wake_lock;
     bool low_power_mode = low_power_mode_check();
+    bool need_close_card = false;
     char *silence_data;
     int socket_fd = -1;
     clock_t startProcTime, endProcTime;
@@ -1559,13 +1560,16 @@ repeat:
                     last_flag == DEVICE_FLAG_BLUETOOTH) {
                     eq_info("[EQ]: %d switch device_flag: %d and open start, write_handle: 0x%x | 0x%x\n",
                         __LINE__, device_flag, write_handle, write_handle_bak);
-
+ 
                     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
                     if (err < 0) {
-                        eq_err("LINE: %d, device_flag: %d open playback device failed, exit eq\n", __LINE__, device_flag);
-                        return -1;
-                        // eq_err("LINE: %d, device_flag: %d open playback device failed, continue\n", __LINE__, device_flag);
-                        // continue;
+                        eq_err("LINE: %d, device_flag: %d open playback device failed, continue\n", __LINE__, device_flag);
+                        if (write_handle_bak && need_close_card) {
+                            snd_pcm_close(write_handle_bak);
+                            write_handle_bak = NULL;
+                            need_close_card = false;
+                        }
+                        continue;
                     }
                     write_handle_bak = write_handle;
                     eq_info("[EQ]: %d switch device_flag: %d and open end, write_handle: 0x%x | 0x%x\n",
@@ -1593,7 +1597,7 @@ repeat:
             } else if (device_flag == DEVICE_FLAG_ANALOG_HP ||
                        device_flag == DEVICE_FLAG_DIGITAL_HP ||
                        device_flag == DEVICE_FLAG_BLUETOOTH) {
-                eq_info("[EQ] line:%d device_flag:%d write_handle: 0x%x\n", __LINE__, device_flag, write_handle);
+                eq_info("[EQ] line:%d device_flag:%d write_handle: 0x%x | 0x%x\n", __LINE__, device_flag, write_handle, write_handle_bak);
 
                 err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
                 if (err < 0) {
@@ -1603,6 +1607,11 @@ repeat:
                         usleep(200 * 1000);
                         last_flag = DEVICE_FLAG_DIGITAL_HP;
                         device_flag = DEVICE_FLAG_LINE_OUT;
+                        need_close_card = true;
+                    } else if (device_flag == DEVICE_FLAG_ANALOG_HP) {
+                        last_flag = DEVICE_FLAG_ANALOG_HP;
+                        device_flag = DEVICE_FLAG_LINE_OUT;
+                        need_close_card = true;
                     }
                     continue;
                 }
