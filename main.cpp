@@ -17,7 +17,7 @@
 #include "Rk_wake_lock.h"
 #include "Rk_socket_app.h"
 
-#define EQ_DRC_PROCESS_VERSION      "1.28 20210717"
+#define EQ_DRC_PROCESS_VERSION      "1.29 20210720"
 
 #define SOC_IS_RK3308           (0x1)
 #define SOC_IS_RK3326           (0x2)
