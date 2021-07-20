@@ -30,7 +30,7 @@
 #define WRITE_DEVICE_NAME "fake_play"
 #define JACK_DEVICE_NAME "fake_jack"
 #define JACK2_DEVICE_NAME "fake_jack2"
-#define READ_FRAME_DEFAULT      768
+#define READ_FRAME_DEFAULT      1920
 #define PERIOD_SIZE_DEFAULT     (READ_FRAME_DEFAULT)
 #define PERIOD_COUNTS_DEFAULT   (8)
 #define BUFFER_SIZE_DEFAULT     (PERIOD_SIZE_DEFAULT * PERIOD_COUNTS_DEFAULT) /* Keeping a large buffer_size ASAP */
@@ -62,10 +62,10 @@ enum BT_CONNECT_STATE{
 #define USER_CAPT_STATUS        "/dev/snd/pcmC0D0c"
 
 /**
- * 0: By default and universal
+ * 0: By default and universal (Recommend)
  * 1: More fast but only used for RK817 or RK809 Codec
  */
-#define KEEPING_HW_CARD         1
+#define KEEPING_HW_CARD         0
 #if KEEPING_HW_CARD
 #define HW_CARD_PATH_DEFAULT    "SPK"
 #endif
@@ -1216,7 +1216,7 @@ static void usage(char *command)
 "-h, --help              help\n"
 "-v  --version           print current version\n"
 "-s, --seconds           close sound card after playback is stopped seconds (default: 3s)\n"
-"-p, --period-size       specify the size of the frame period (default: 768)\n"
+"-p, --period-size       specify the size of the frame period (default: 1920)\n"
 "-n, --period-counts     specify the count of the frame periods (default: 8)\n"
 #if KEEPING_HW_CARD
 "-P, --path-name         specify the name of playback path for RK817/RK809 codec (default: SPK)\n"
