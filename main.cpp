@@ -107,6 +107,7 @@ static int g_buffer_size = BUFFER_SIZE_DEFAULT;
 
 #if KEEPING_HW_CARD
 static char g_path_name[32];
+volatile static bool g_fast_codec = false;
 #endif
 
 static struct user_play_inotify g_upi;
@@ -692,6 +693,10 @@ int alsa_fake_device_write_open(snd_pcm_t** write_handle, int channels,
     if(write_params)
         snd_pcm_hw_params_free(write_params);
 
+#if KEEPING_HW_CARD
+    if (device_flag == DEVICE_FLAG_LINE_OUT)
+        g_fast_codec = true;
+#endif
     return 0;
 
 failed:
@@ -700,6 +705,7 @@ failed:
 
     snd_pcm_close(*write_handle);
     *write_handle = NULL;
+
     return -1;
 }
 
@@ -1255,12 +1261,13 @@ int main(int argc, char *argv[])
     // pthread_t power_status_listen_thread;
     // struct rk_wake_lock* wake_lock;
     bool low_power_mode = low_power_mode_check();
-    bool need_close_card = false;
+    volatile bool need_close_card = false;
     char *silence_data;
     int socket_fd = -1;
     clock_t startProcTime, endProcTime;
     int mute_time = MUTE_TIME_DEFAULT;
     int option_index;
+
     static char *command = argv[0];
     static const char short_options[] = "hvs:p:n:P:";
     static const struct option long_options[] = {
@@ -1384,21 +1391,29 @@ repeat:
     if (write_handle_bak != NULL) {
         snd_pcm_close(write_handle_bak);
         eq_info("[EQ] resume process and release last write_handle_bak: 0x%x\n", write_handle_bak);
+        write_handle_bak = NULL;
     } else {
         eq_info("[EQ] run process first\n");
     }
 #endif
 
+    device_flag = get_device_flag();
     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
     if (err < 0) {
-        eq_err("LINE: %d, first open playback device failed, exit eq\n", __LINE__);
-        return -1;
+        eq_err("LINE: %d, first open playback device failed, and repeat\n", __LINE__);
+        // return -1;
+        goto repeat;
+    } else {
+        eq_info("LINE: %d, open write_handle: 0x%x\n", __LINE__, write_handle);
     }
 
 #if KEEPING_HW_CARD
-    write_handle_bak = write_handle;
-    eq_info("[EQ] init write_handle_bak: 0x%x write_handle: 0x%x\n",
-        write_handle_bak, write_handle);
+    /* Avoid start with plugged phones and crashed during close sound card. */
+    if (device_flag == DEVICE_FLAG_LINE_OUT)
+        write_handle_bak = write_handle;
+
+    eq_info("[EQ] line: %d init write_handle: 0x%x | 0x%x, device_flag: %d | %d\n",
+        __LINE__, write_handle, write_handle_bak, device_flag, last_flag);
 #endif
 
     // RK_acquire_wake_lock(wake_lock);
@@ -1423,7 +1438,7 @@ repeat:
             err = snd_pcm_recover(capture_handle, err, 0);
             // Still an error, need to exit.
             if (err < 0) {
-                eq_err("[EQ] Error occured while recording: %s\n", snd_strerror(err));
+                eq_err("[EQ] Error occured while recording: %s, goto repeat\n", snd_strerror(err));
                 // usleep(200 * 1000);
                 if (capture_handle)
                     snd_pcm_close(capture_handle);
@@ -1497,16 +1512,19 @@ repeat:
                 if (device_flag == DEVICE_FLAG_LINE_OUT) {
                     system("amixer sset 'Playback Path' OFF");
                     eq_info("[EQ] disable Playback path and PA\n");
+                    write_handle = NULL;
                 } else {
                     snd_pcm_close(write_handle);
                     eq_info("[EQ]: %d Close sound card\n", __LINE__);
+                    write_handle = NULL;
                 }
 #else
                 snd_pcm_close(write_handle);
+                write_handle = NULL;
 #endif
 
                 // RK_release_wake_lock(wake_lock);
-                write_handle = NULL;
+
                 if (power_state == POWER_STATE_SUSPENDING) {
                     eq_err("[EQ] suspend and close write handle for you right now!\n");
                     power_state = POWER_STATE_SUSPEND;
@@ -1533,17 +1551,56 @@ repeat:
             eq_debug("\n[EQ] Device route changed, from\"%s\" to \"%s\"\n\n",
                    get_device_name(device_flag), get_device_name(new_flag));
             device_flag = new_flag;
-            if (write_handle) {
 #if KEEPING_HW_CARD
-                if (device_flag != DEVICE_FLAG_BLUETOOTH_BSA) {
-                    snd_pcm_close(write_handle);
-                    eq_info("[EQ]: %d Close sound card\n", __LINE__);
+            if (device_flag == DEVICE_FLAG_LINE_OUT) {
+                if (g_fast_codec == true &&
+                    last_flag == DEVICE_FLAG_LINE_OUT &&
+                    last_flag == device_flag) {
+                    eq_info("[EQ]: %d Do nothing, write_handle: 0x%x | 0x%x\n",
+                        __LINE__, device_flag, write_handle, write_handle_bak);
+                } else {
+                    eq_info("[EQ]: %d Close card LINE_OUT from %d, write_handle: 0x%x | 0x%x, g_fast_codec:%d\n",
+                        __LINE__, last_flag, write_handle, write_handle_bak, g_fast_codec);
+
+                    if (write_handle) {
+                        snd_pcm_close(write_handle);
+                        eq_info("[EQ]: %d Close sound card\n", __LINE__);
+                        write_handle = NULL;
+                        write_handle_bak = NULL;
+                        g_fast_codec = false;
+                    }
                 }
+            } else {
+                eq_info("[EQ]: %d Close card, %d, write_handle: 0x%x | 0x%x, g_fast_codec:%d\n",
+                    __LINE__, device_flag, write_handle, write_handle_bak, g_fast_codec);
+                if (write_handle == write_handle_bak) {
+                    if (write_handle) {
+                        snd_pcm_close(write_handle);
+                        eq_info("[EQ]: %d Close sound card\n", __LINE__);
+                        write_handle = NULL;
+                        write_handle_bak = NULL;
+                        g_fast_codec = false;
+                    }
+                } else {
+                    if (write_handle_bak) {
+                        snd_pcm_close(write_handle_bak);
+                        eq_info("[EQ]: %d Close write_handle_bak card\n", __LINE__);
+                        write_handle_bak = NULL;
+                    }
+                    if (write_handle) {
+                        snd_pcm_close(write_handle);
+                        eq_info("[EQ]: %d Close write_handle card\n", __LINE__);
+                        write_handle = NULL;
+                    }
+                    g_fast_codec = false;
+                }
+            }
 #else
+            if (write_handle) {
                 snd_pcm_close(write_handle);
-#endif
                 write_handle = NULL;
             }
+#endif
         }
 
         // eq_info("[EQ] device_flag: %d, %s, write_handle: 0x%x\n",
@@ -1555,26 +1612,9 @@ repeat:
                     device_flag, get_device_name(device_flag), write_handle, socket_fd);
 #if KEEPING_HW_CARD
             if (device_flag == DEVICE_FLAG_LINE_OUT) {
-                if (last_flag == DEVICE_FLAG_ANALOG_HP ||
-                    last_flag == DEVICE_FLAG_DIGITAL_HP ||
-                    last_flag == DEVICE_FLAG_BLUETOOTH) {
-                    eq_info("[EQ]: %d switch device_flag: %d and open start, write_handle: 0x%x | 0x%x\n",
-                        __LINE__, device_flag, write_handle, write_handle_bak);
- 
-                    err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
-                    if (err < 0) {
-                        eq_err("LINE: %d, device_flag: %d open playback device failed, continue\n", __LINE__, device_flag);
-                        if (write_handle_bak && need_close_card) {
-                            snd_pcm_close(write_handle_bak);
-                            write_handle_bak = NULL;
-                            need_close_card = false;
-                        }
-                        continue;
-                    }
-                    write_handle_bak = write_handle;
-                    eq_info("[EQ]: %d switch device_flag: %d and open end, write_handle: 0x%x | 0x%x\n",
-                        __LINE__, device_flag, write_handle, write_handle_bak);
-                } else {
+                if (g_fast_codec == true &&
+                    last_flag == DEVICE_FLAG_LINE_OUT &&
+                    write_handle_bak > 0) {
                     char cmd_str[64] = { 0 };
 
                     write_handle = write_handle_bak;
@@ -1584,39 +1624,82 @@ repeat:
                     eq_info("[EQ] enable Playback path and PA, write_handle: 0x%x\n", write_handle);
                     // snd_pcm_forward(write_handle, g_read_frame);
                     // continue;
+                } else  {
+                    eq_info("EQ]: %d if switch device_flag: %d | %d and open start, write_handle: 0x%x | 0x%x g_fast_codec: %d\n",
+                        __LINE__, device_flag, last_flag, write_handle, write_handle_bak, g_fast_codec);
+
+                    err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
+                    if (err < 0 || (write_handle == NULL && socket_fd < 0)) {
+                        eq_err("[EQ] line:%d Route change failed! Using default audio path.\n", __LINE__);
+                        // last_flag = DEVICE_FLAG_LINE_OUT;
+                        g_bt_is_connect = BT_DISCONNECT;
+                        continue;
+                    } else {
+                        eq_info("LINE: %d, open write_handle: 0x%x\n", __LINE__, write_handle);
+                    }
+                    write_handle_bak = write_handle;
                 }
-            } else if (device_flag == DEVICE_FLAG_BLUETOOTH_BSA) {
-                err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
-                if (err < 0 || (write_handle == NULL && socket_fd < 0)) {
-                    eq_err("[EQ] Route change failed! Using default audio path.\n");
-                    device_flag = DEVICE_FLAG_LINE_OUT;
-                    g_bt_is_connect = BT_DISCONNECT;
-                } else {
-                    eq_info("[EQ] enable DEVICE_FLAG_BLUETOOTH_BSA, write_handle: 0x%x\n", write_handle);
-                }
-            } else if (device_flag == DEVICE_FLAG_ANALOG_HP ||
-                       device_flag == DEVICE_FLAG_DIGITAL_HP ||
-                       device_flag == DEVICE_FLAG_BLUETOOTH) {
-                eq_info("[EQ] line:%d device_flag:%d write_handle: 0x%x | 0x%x\n", __LINE__, device_flag, write_handle, write_handle_bak);
+            } else {
+                static int overflow = 0;
+
+                eq_info("EQ]: %d else switch device_flag: %d | %d and open start, write_handle: 0x%x | 0x%x g_fast_codec: %d\n",
+                        __LINE__, device_flag, last_flag, write_handle, write_handle_bak, g_fast_codec);
+
+                // if (write_handle_bak) {
+                //     snd_pcm_close(write_handle_bak);
+                //     write_handle_bak = NULL;
+                //     g_fast_codec = false;
+                //     eq_info("EQ]: %d close g_fast_codec\n", __LINE__);
+                // }
 
                 err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
-                if (err < 0) {
-                    eq_err("[EQ] Maybe ignore(%d): write_handle: 0x%x. Using default audio path.\n", err, write_handle);
+                if (err < 0 || (write_handle == NULL && socket_fd < 0)) {
+                    eq_err("[EQ] line:%d Route change failed!\n", __LINE__);
+                    // device_flag = DEVICE_FLAG_LINE_OUT;
+
                     if (device_flag == DEVICE_FLAG_DIGITAL_HP) {
                         /* Maybe need to more prepare some time for digital headphone */
                         usleep(200 * 1000);
-                        last_flag = DEVICE_FLAG_DIGITAL_HP;
+                        if (overflow++ >= 12) {
+                            /* about 3s */
+                            eq_err("[EQ] line:%d Using default audio path: %d, overflow: %d\n",
+                                __LINE__, DEVICE_FLAG_LINE_OUT, overflow);
+                            last_flag = DEVICE_FLAG_DIGITAL_HP;
+                            device_flag = DEVICE_FLAG_LINE_OUT;
+                            overflow = 0;
+                        }
+
+                        // need_close_card = true;
+                    } else {
+                        eq_err("[EQ] line:%d device_flag will: %d to %d\n",
+                                __LINE__, last_flag, DEVICE_FLAG_LINE_OUT);
+                        if (device_flag == DEVICE_FLAG_BLUETOOTH ||
+                            device_flag == DEVICE_FLAG_BLUETOOTH_BSA) {
+                            g_bt_is_connect = BT_DISCONNECT;
+                        }
+
+                        last_flag = device_flag;
                         device_flag = DEVICE_FLAG_LINE_OUT;
-                        need_close_card = true;
-                    } else if (device_flag == DEVICE_FLAG_ANALOG_HP) {
-                        last_flag = DEVICE_FLAG_ANALOG_HP;
-                        device_flag = DEVICE_FLAG_LINE_OUT;
-                        need_close_card = true;
                     }
+                    // else if (device_flag == DEVICE_FLAG_ANALOG_HP) {
+                    //     last_flag = DEVICE_FLAG_ANALOG_HP;
+                    //     device_flag = DEVICE_FLAG_LINE_OUT;
+                    //     need_close_card = true;
+                    // }
+
+                    // g_bt_is_connect = BT_DISCONNECT;
                     continue;
+                } else {
+                    eq_err("[EQ] line:%d Clean overflow:%d, write_handle: 0x%x\n", __LINE__, overflow, write_handle);
+                    overflow = 0;
                 }
-                eq_info("[EQ]: %d switch device_flag: %d and open\n", __LINE__, device_flag);
-                write_handle_bak = write_handle;
+
+                if (write_handle_bak) {
+                    snd_pcm_close(write_handle_bak);
+                    write_handle_bak = NULL;
+                    g_fast_codec = false;
+                    eq_info("EQ]: %d close g_fast_codec\n", __LINE__);
+                }
             }
 #else
             err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
@@ -1708,20 +1791,25 @@ repeat:
                 else if (err == -EBADFD) {
                     int err;
 
-                    eq_err("====[EQ] %d, EBADFD and re-open sound, write_handle: 0x%x\n", __LINE__, write_handle);
+                    eq_err("====[EQ] %d, EBADFD and re-open sound, device_flag: %d write_handle: 0x%x | 0x%x\n",
+                        __LINE__, device_flag, write_handle, write_handle_bak);
 
                     if (write_handle) {
                         snd_pcm_close(write_handle);
                         write_handle = NULL;
+                        write_handle_bak = NULL;
+                        g_fast_codec = false;
                     }
 
                     err = alsa_fake_device_write_open(&write_handle, channels, sampleRate, device_flag, &socket_fd);
                     if (err < 0) {
                         // eq_err("LINE: %d, open playback device failed, exit eq\n", __LINE__);
                         eq_err("LINE: %d, open playback device failed, continue\n", __LINE__);
-                        write_handle_bak = write_handle;
+                        // write_handle_bak = write_handle;
                         // return -1;
                         continue;
+                    } else {
+                        eq_info("LINE: %d, open write_handle: 0x%x\n", __LINE__, write_handle);
                     }
 
                     write_handle_bak = write_handle;
